@@ -81,6 +81,7 @@ class ApiService {
     };
 
     try {
+      console.log('API Request:', { url, method: options.method || 'GET' });
       const response = await fetch(url, config);
       let data;
 
@@ -91,8 +92,12 @@ class ApiService {
         data = { message: `HTTP ${response.status}: ${response.statusText}` };
       }
 
+      console.log('API Response:', { status: response.status, data });
+
       if (!response.ok) {
-        throw new Error(data.message || `HTTP ${response.status}: ${response.statusText}`);
+        const errorMessage = data.message || data.error || `HTTP ${response.status}: ${response.statusText}`;
+        console.error('API Error Response:', errorMessage);
+        throw new Error(errorMessage);
       }
 
       return data;
@@ -189,6 +194,33 @@ class ApiService {
         'Authorization': `Bearer ${token}`,
       },
       body: form,
+    });
+  }
+
+  async favouriteMessage(token: string, messageId: string): Promise<any> {
+    return this.request<any>(`/auth/messages/${messageId}/favourite`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+  }
+
+  async unfavouriteMessage(token: string, messageId: string): Promise<any> {
+    return this.request<any>(`/auth/messages/${messageId}/unfavourite`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+  }
+
+  async getFavouriteMessages(token: string): Promise<any> {
+    return this.request<any>('/auth/messages/favourites', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
     });
   }
 }

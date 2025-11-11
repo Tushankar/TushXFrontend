@@ -267,12 +267,12 @@ export default function SettingsScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.settingsItem, { borderBottomWidth: 0 }]}
-            onPress={() => {}}
+            onPress={() => router.push('/favourites' as any)}
           >
             <View style={styles.itemLeft}>
-              <Feather name="archive" size={20} color={isLightMode ? '#54656F' : '#8696A0'} />
+              <Feather name="star" size={20} color={isLightMode ? '#54656F' : '#8696A0'} />
               <Text style={[styles.itemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>
-                Chat backup
+                Favourites
               </Text>
             </View>
             <Feather name="chevron-right" size={20} color={isLightMode ? '#8696A0' : '#667781'} />

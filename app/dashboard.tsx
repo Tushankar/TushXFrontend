@@ -791,19 +791,26 @@ export default function DashboardScreen() {
       </Modal>
       {/* Bottom Navigation */}
       <BlurView intensity={80} tint={isLightMode ? 'light' : 'dark'} style={[styles.bottomNav, { borderTopColor: isLightMode ? 'rgba(233, 237, 239, 0.3)' : 'rgba(42, 57, 66, 0.3)' }]}>
-        <TouchableOpacity style={styles.navItem} onPress={() => setActiveTab('status')}>
+        <TouchableOpacity style={styles.navItem} onPress={() => { setActiveTab('status'); router.push('/status' as any); }}>
           <Feather name="radio" size={24} color={activeTab === 'status' ? (isLightMode ? '#075E54' : '#00A884') : (isLightMode ? '#667781' : '#8696A0')} />
           <Text style={[styles.navLabel, { color: activeTab === 'status' ? (isLightMode ? '#075E54' : '#00A884') : (isLightMode ? '#667781' : '#8696A0') }]}>Status</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.navItem} onPress={() => setActiveTab('phone')}>
+        <TouchableOpacity style={styles.navItem} onPress={() => { setActiveTab('phone'); router.push('/calls' as any); }}>
           <Feather name="phone" size={24} color={activeTab === 'phone' ? (isLightMode ? '#075E54' : '#00A884') : (isLightMode ? '#667781' : '#8696A0')} />
           <Text style={[styles.navLabel, { color: activeTab === 'phone' ? (isLightMode ? '#075E54' : '#00A884') : (isLightMode ? '#667781' : '#8696A0') }]}>Calls</Text>
         </TouchableOpacity>
-                <TouchableOpacity style={styles.navItem} onPress={() => setActiveTab('chats')}>
+
+        <TouchableOpacity style={styles.navItem} onPress={() => { setActiveTab('community'); router.push('/community' as any); }}>
+          <Feather name="globe" size={24} color={activeTab === 'community' ? (isLightMode ? '#075E54' : '#00A884') : (isLightMode ? '#667781' : '#8696A0')} />
+          <Text style={[styles.navLabel, { color: activeTab === 'community' ? (isLightMode ? '#075E54' : '#00A884') : (isLightMode ? '#667781' : '#8696A0') }]}>Community</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.navItem} onPress={() => setActiveTab('chats')}>
           <Feather name="message-circle" size={24} color={activeTab === 'chats' ? (isLightMode ? '#075E54' : '#00A884') : (isLightMode ? '#667781' : '#8696A0')} />
           <Text style={[styles.navLabel, { color: activeTab === 'chats' ? (isLightMode ? '#075E54' : '#00A884') : (isLightMode ? '#667781' : '#8696A0') }]}>Chats</Text>
         </TouchableOpacity>
+
         <TouchableOpacity style={styles.navItem} onPress={() => { setActiveTab('settings'); router.push('/settings' as any); }}>
           <Feather name="settings" size={24} color={activeTab === 'settings' ? (isLightMode ? '#075E54' : '#00A884') : (isLightMode ? '#667781' : '#8696A0')} />
           <Text style={[styles.navLabel, { color: activeTab === 'settings' ? (isLightMode ? '#075E54' : '#00A884') : (isLightMode ? '#667781' : '#8696A0') }]}>Settings</Text>
