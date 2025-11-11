@@ -18,6 +18,7 @@ export default function SettingsScreen() {
   });
   const [loadingNotifications, setLoadingNotifications] = useState(false);
 
+  
   // Function to generate background color based on first letter
   const getAvatarColor = (name: string) => {
     if (!name) return '#00A884';
@@ -255,7 +256,7 @@ export default function SettingsScreen() {
           </View>
           <TouchableOpacity
             style={[styles.settingsItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
-            onPress={() => {}}
+            onPress={() => router.push('/wallpaper' as any)}
           >
             <View style={styles.itemLeft}>
               <Feather name="image" size={20} color={isLightMode ? '#54656F' : '#8696A0'} />

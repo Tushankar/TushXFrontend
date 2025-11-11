@@ -51,6 +51,7 @@ export default function FavouritesScreen() {
   const { colors } = useTheme();
   const [favouriteMessages, setFavouriteMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [currentUserId, setCurrentUserId] = useState<string>('');
   const isLightMode = colors.background === '#FFFFFF' || colors.background === '#fff';
 
   const loadFavouriteMessages = async () => {
@@ -61,6 +62,22 @@ export default function FavouritesScreen() {
         setIsLoading(false);
         return;
       }
+
+      // Fetch current user profile to get user id
+      const profileResponse = await fetch('http://192.168.0.150:8080/api/auth/profile', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!profileResponse.ok) {
+        throw new Error('Failed to fetch profile');
+      }
+
+      const profileData = await profileResponse.json();
+      setCurrentUserId(profileData.user.id);
 
       console.log('Loading favourite messages with token:', authToken.substring(0, 20) + '...');
       const data = await apiService.getFavouriteMessages(authToken);
@@ -102,7 +119,6 @@ export default function FavouritesScreen() {
 
   const navigateToChat = (message: Message) => {
     // Determine the other user ID
-    const currentUserId = message.fromUser?.id === message.from ? message.fromUser?.id : message.toUser?.id;
     const otherUserId = message.from === currentUserId ? message.to : message.from;
     const otherUserName = message.from === currentUserId ? (message.toUser?.name || 'Unknown') : (message.fromUser?.name || 'Unknown');
 
@@ -111,8 +127,7 @@ export default function FavouritesScreen() {
   };
 
   const renderFavouriteMessage = ({ item }: { item: Message }) => {
-    const isMine = item.from === item.fromUser?.id; // Assuming fromUser is the current user if it's their message
-    const otherUser = isMine ? item.toUser : item.fromUser;
+    const otherUser = item.from === currentUserId ? item.toUser : item.fromUser;
 
     return (
       <TouchableOpacity

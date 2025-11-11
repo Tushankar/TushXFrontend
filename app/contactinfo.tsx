@@ -2,7 +2,8 @@ import { useTheme } from '@/constants/ThemeContext';
 import { Feather } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { Alert, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, FlatList, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { apiService } from '../utils/api';
 import { authStorage } from '../utils/authStorage';
 export default function ContactInfoScreen() {
   const router = useRouter();
@@ -13,6 +14,11 @@ export default function ContactInfoScreen() {
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [showFullImage, setShowFullImage] = useState(false);
+  const [starredMessagesCount, setStarredMessagesCount] = useState(0);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const isLightMode = colors.background === '#FFFFFF' || colors.background === '#fff';
   useEffect(() => {
     fetchContactInfo();
@@ -65,6 +71,18 @@ export default function ContactInfoScreen() {
       }
 
       setUser(foundUser);
+
+      // Fetch favourite messages to count starred messages for this user
+      try {
+        const favouritesData = await apiService.getFavouriteMessages(token);
+        const starredCount = favouritesData.messages.filter((msg: any) => 
+          msg.from === userId || msg.to === userId
+        ).length;
+        setStarredMessagesCount(starredCount);
+      } catch (favouritesError) {
+        console.error('Failed to fetch starred messages count:', favouritesError);
+        setStarredMessagesCount(0);
+      }
     } catch (error) {
       console.error('Failed to fetch contact info:', error);
       Alert.alert('Error', 'Failed to load contact information');
@@ -88,6 +106,53 @@ export default function ContactInfoScreen() {
   };
   const reportContact = () => {
     Alert.alert('Report Contact', 'Report contact feature coming soon!');
+  };
+
+  const performSearch = async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    try {
+      setIsSearching(true);
+      const token = await authStorage.getToken();
+      if (!token) return;
+
+      // Fetch all messages between current user and this contact
+      const messagesResponse = await fetch(`http://192.168.0.150:8080/api/auth/messages/${userId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!messagesResponse.ok) {
+        throw new Error('Failed to fetch messages');
+      }
+
+      const messagesData = await messagesResponse.json();
+      const messages = messagesData.messages || [];
+
+      // Filter messages that contain the search query (case insensitive)
+      const filteredMessages = messages.filter((msg: any) =>
+        msg.message.toLowerCase().includes(query.toLowerCase())
+      );
+
+      setSearchResults(filteredMessages);
+    } catch (error) {
+      console.error('Search failed:', error);
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const navigateToMessage = (message: any) => {
+    setShowSearchModal(false);
+    // Navigate to chat with the message ID to scroll to it
+    router.push(`/chat?userId=${userId}&userName=${encodeURIComponent(user?.name || 'Unknown')}&verified=1&messageId=${message.id}` as any);
   };
   if (loading) {
     return (
@@ -211,7 +276,7 @@ export default function ContactInfoScreen() {
             </View>
             <Text style={[styles.actionText, { color: isLightMode ? '#00A884' : '#00A884' }]}>Video</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.actionButton} onPress={() => {}}>
+          <TouchableOpacity style={styles.actionButton} onPress={() => setShowSearchModal(true)}>
             <View style={[styles.actionIconContainer, { backgroundColor: isLightMode ? '#00A884' : '#00A884' }]}>
               <Feather name="search" size={22} color="#FFFFFF" />
             </View>
@@ -233,7 +298,10 @@ export default function ContactInfoScreen() {
               <Feather name="chevron-right" size={20} color={isLightMode ? '#8696A0' : '#667781'} />
             </View>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.listItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}>
+          <TouchableOpacity 
+            style={[styles.listItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+            onPress={() => router.push('/favourites' as any)}
+          >
             <View style={styles.listItemLeft}>
               <Feather name="star" size={20} color={isLightMode ? '#54656F' : '#8696A0'} />
               <Text style={[styles.listItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>
@@ -241,11 +309,11 @@ export default function ContactInfoScreen() {
               </Text>
             </View>
             <View style={styles.listItemRight}>
-              <Text style={[styles.listItemCount, { color: isLightMode ? '#667781' : '#8696A0' }]}>0</Text>
+              <Text style={[styles.listItemCount, { color: isLightMode ? '#667781' : '#8696A0' }]}>{starredMessagesCount}</Text>
               <Feather name="chevron-right" size={20} color={isLightMode ? '#8696A0' : '#667781'} />
             </View>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.listItem}>
+          <TouchableOpacity style={styles.listItem} onPress={() => setShowSearchModal(true)}>
             <View style={styles.listItemLeft}>
               <Feather name="search" size={20} color={isLightMode ? '#54656F' : '#8696A0'} />
               <Text style={[styles.listItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>
@@ -387,6 +455,93 @@ export default function ContactInfoScreen() {
               resizeMode="contain"
             />
           )}
+        </View>
+      </Modal>
+
+      {/* Search Modal */}
+      <Modal visible={showSearchModal} transparent animationType="slide" onRequestClose={() => setShowSearchModal(false)}>
+        <View style={styles.searchModalOverlay}>
+          <View style={[styles.searchModal, { backgroundColor: isLightMode ? '#FFFFFF' : '#1F2C34' }]}>
+            {/* Search Header */}
+            <View style={styles.searchHeader}>
+              <TouchableOpacity onPress={() => setShowSearchModal(false)} style={styles.searchBackButton}>
+                <Feather name="arrow-left" size={24} color={isLightMode ? '#000000' : '#E9EDEF'} />
+              </TouchableOpacity>
+              <Text style={[styles.searchTitle, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>
+                Search in chat
+              </Text>
+              <View style={styles.searchPlaceholder} />
+            </View>
+
+            {/* Search Input */}
+            <View style={styles.searchInputContainer}>
+              <Feather name="search" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+              <TextInput
+                style={[styles.searchInput, { color: isLightMode ? '#000000' : '#E9EDEF' }]}
+                placeholder="Search messages..."
+                placeholderTextColor={isLightMode ? '#667781' : '#8696A0'}
+                value={searchQuery}
+                onChangeText={(text: string) => {
+                  setSearchQuery(text);
+                  performSearch(text);
+                }}
+                autoFocus
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => {
+                  setSearchQuery('');
+                  setSearchResults([]);
+                }}>
+                  <Feather name="x" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Search Results */}
+            {isSearching ? (
+              <View style={styles.searchLoading}>
+                <Text style={[styles.searchLoadingText, { color: isLightMode ? '#667781' : '#8696A0' }]}>
+                  Searching...
+                </Text>
+              </View>
+            ) : searchResults.length > 0 ? (
+              <FlatList
+                data={searchResults}
+                keyExtractor={(item: any) => item.id}
+                renderItem={({ item }: { item: any }) => (
+                  <TouchableOpacity
+                    style={styles.searchResultItem}
+                    onPress={() => navigateToMessage(item)}
+                  >
+                    <View style={styles.searchResultContent}>
+                      <Text style={[styles.searchResultText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>
+                        {item.message}
+                      </Text>
+                      <Text style={[styles.searchResultDate, { color: isLightMode ? '#667781' : '#8696A0' }]}>
+                        {new Date(item.timestamp).toLocaleDateString()}
+                      </Text>
+                    </View>
+                    <Feather name="chevron-right" size={20} color={isLightMode ? '#8696A0' : '#667781'} />
+                  </TouchableOpacity>
+                )}
+                style={styles.searchResultsList}
+              />
+            ) : searchQuery.length > 0 ? (
+              <View style={styles.searchEmpty}>
+                <Feather name="search" size={48} color={isLightMode ? '#DFE5E7' : '#2A3942'} />
+                <Text style={[styles.searchEmptyText, { color: isLightMode ? '#667781' : '#8696A0' }]}>
+                  No messages found
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.searchEmpty}>
+                <Feather name="search" size={48} color={isLightMode ? '#DFE5E7' : '#2A3942'} />
+                <Text style={[styles.searchEmptyText, { color: isLightMode ? '#667781' : '#8696A0' }]}>
+                  Search for messages in this chat
+                </Text>
+              </View>
+            )}
+          </View>
         </View>
       </Modal>
     </View>
@@ -608,5 +763,90 @@ const styles = StyleSheet.create({
   fullImage: {
     width: '100%',
     height: '100%',
+  },
+  searchModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  searchModal: {
+    flex: 1,
+    marginTop: 100,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+  searchHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0, 0, 0, 0.1)',
+  },
+  searchBackButton: {
+    padding: 4,
+  },
+  searchTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    flex: 1,
+    textAlign: 'center',
+    marginLeft: 16,
+  },
+  searchPlaceholder: {
+    width: 32,
+  },
+  searchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0, 0, 0, 0.1)',
+    gap: 12,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    paddingVertical: 8,
+  },
+  searchLoading: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  searchLoadingText: {
+    fontSize: 16,
+  },
+  searchResultsList: {
+    flex: 1,
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0, 0, 0, 0.05)',
+  },
+  searchResultContent: {
+    flex: 1,
+  },
+  searchResultText: {
+    fontSize: 16,
+    marginBottom: 4,
+  },
+  searchResultDate: {
+    fontSize: 12,
+  },
+  searchEmpty: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingTop: 100,
+  },
+  searchEmptyText: {
+    fontSize: 16,
+    marginTop: 16,
+    textAlign: 'center',
   },
 });

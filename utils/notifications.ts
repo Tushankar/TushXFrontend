@@ -73,7 +73,13 @@ export const getPushToken = async (): Promise<string | null> => {
     const tokenData = await Notifications.getExpoPushTokenAsync();
     return tokenData.data;
   } catch (error) {
-    console.error('Error getting push token:', error);
+    // Silently fail - this is often due to Expo service temporary unavailability
+    // Only log if it's not a 503/service unavailable error
+    if (error instanceof Error && error.message.includes('503')) {
+      console.warn('Expo push notification service temporarily unavailable');
+    } else {
+      console.error('Error getting push token:', error);
+    }
     return null;
   }
 };

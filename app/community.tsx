@@ -312,17 +312,173 @@ const MOCK_POSTS = [
 
 type Post = typeof MOCK_POSTS[0];
 
-export default function CommunityScreen() {
-  const [posts, setPosts] = useState<Post[]>(MOCK_POSTS);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showCommentsModal, setShowCommentsModal] = useState(false);
-  const [selectedPost, setSelectedPost] = useState<Post | null>(null);
+const CreatePostScreen = ({
+  onBack,
+  onPost,
+}: {
+  onBack: () => void;
+  onPost: (text: string, image: string) => void;
+}) => {
   const [postText, setPostText] = useState('');
   const [postImage, setPostImage] = useState('');
+
+  const handlePost = () => {
+    if (postText.trim()) {
+      onPost(postText, postImage);
+      setPostText('');
+      setPostImage('');
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.createScreenContainer}
+    >
+      <View style={styles.createTopBar}>
+        <TouchableOpacity onPress={onBack} style={styles.createTopBarButton}>
+          <Feather name="x" size={24} color="#000000" />
+        </TouchableOpacity>
+        <Text style={styles.createTopBarTitle}>Create</Text>
+        <TouchableOpacity
+          onPress={handlePost}
+          style={[
+            styles.createTopBarButton,
+            { opacity: postText.trim() ? 1 : 0.5 }
+          ]}
+          disabled={!postText.trim()}
+        >
+          <Text
+            style={[
+              styles.createTopBarPostText,
+              { color: postText.trim() ? '#00A884' : '#000000' }
+            ]}
+          >
+            Post
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        style={styles.createScrollView}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Author Preview - Instagram-like subtle header */}
+        <View style={styles.authorPreview}>
+          <Image source={{ uri: 'https://i.pravatar.cc/150?img=0' }} style={styles.authorPreviewAvatar} />
+          <View>
+            <Text style={[styles.authorPreviewName, { color: '#000000' }]}>You</Text>
+            <Text style={[styles.authorPreviewHandle, { color: '#667781' }]}>@your_username</Text>
+          </View>
+        </View>
+
+        {/* Post Text Input - Larger, Instagram caption style */}
+        <TextInput
+          style={[styles.postTextInput, { color: '#000000' }]}
+          placeholder="What's on your mind?"
+          placeholderTextColor="#8696A0"
+          multiline
+          maxLength={2200} // Instagram limit
+          value={postText}
+          onChangeText={setPostText}
+          textAlignVertical="top"
+          style={styles.instagramCaptionInput}
+        />
+
+        {/* Character Count - Bottom aligned like Instagram */}
+        <Text style={[styles.charCount, { color: postText.length > 2000 ? '#E74C3C' : '#8696A0' }]}>
+          {postText.length}/2200
+        </Text>
+
+        {/* Image Preview - Full width, with overlay controls like Instagram */}
+        {postImage ? (
+          <View style={styles.imagePreview}>
+            <Image source={{ uri: postImage }} style={styles.imagePreviewImage} />
+            <TouchableOpacity
+              style={styles.removeImageButton}
+              onPress={() => setPostImage('')}
+            >
+              <Feather name="x" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.mediaSelectionPlaceholder}>
+            <Feather name="plus-circle" size={56} color="#CCCCCC" />
+            <Text style={styles.mediaSelectionText}>Select from gallery or take a photo</Text>
+          </View>
+        )}
+
+        {/* Action Buttons - Instagram-style bottom tray */}
+        <View style={styles.createPostActions}>
+          <TouchableOpacity
+            onPress={() => setPostImage(`https://picsum.photos/400/500?random=${Date.now()}`)}
+            style={styles.actionIconButton}
+          >
+            <Feather name="image" size={24} color="#00A884" />
+            <Text style={styles.actionIconLabel}>Photo</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionIconButton}>
+            <Feather name="video" size={24} color="#00A884" />
+            <Text style={styles.actionIconLabel}>Video</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionIconButton}>
+            <Feather name="smile" size={24} color="#00A884" />
+            <Text style={styles.actionIconLabel}>Emoji</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionIconButton}>
+            <Feather name="tag" size={24} color="#00A884" />
+            <Text style={styles.actionIconLabel}>Tag</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+};
+
+export default function CommunityScreen() {
+  const [posts, setPosts] = useState<Post[]>(MOCK_POSTS);
+  const [showCommentsModal, setShowCommentsModal] = useState(false);
+  const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [newComment, setNewComment] = useState('');
   const [activeTab, setActiveTab] = useState('community');
+  const [currentScreen, setCurrentScreen] = useState<'community' | 'create'>('community');
   const router = useRouter();
   const isLightMode = true;
+
+  if (currentScreen === 'create') {
+    return (
+      <CreatePostScreen
+        onBack={() => setCurrentScreen('community')}
+        onPost={(text, image) => {
+          if (text.trim()) {
+            const newPost: Post = {
+              id: Date.now().toString(),
+              author: {
+                id: 'currentUser',
+                name: 'You',
+                avatar: 'https://i.pravatar.cc/150?img=0',
+                username: '@your_username',
+                isVerified: false,
+              },
+              content: text,
+              image: image || 'https://picsum.photos/400/500?random=0',
+              timestamp: 'Just now',
+              likes: 0,
+              comments: 0,
+              shares: 0,
+              liked: false,
+              saved: false,
+              comments_data: [],
+            };
+            setPosts([newPost, ...posts]);
+            setCurrentScreen('community');
+            Keyboard.dismiss();
+          }
+        }}
+      />
+    );
+  }
 
   const handleLike = (postId: string) => {
     setPosts(prevPosts =>
@@ -340,35 +496,6 @@ export default function CommunityScreen() {
         post.id === postId ? { ...post, saved: !post.saved } : post
       )
     );
-  };
-
-  const handleCreatePost = () => {
-    if (postText.trim()) {
-      const newPost: Post = {
-        id: Date.now().toString(),
-        author: {
-          id: 'currentUser',
-          name: 'You',
-          avatar: 'https://i.pravatar.cc/150?img=0',
-          username: '@your_username',
-          isVerified: false,
-        },
-        content: postText,
-        image: postImage || 'https://picsum.photos/400/500?random=0',
-        timestamp: 'Just now',
-        likes: 0,
-        comments: 0,
-        shares: 0,
-        liked: false,
-        saved: false,
-        comments_data: [],
-      };
-      setPosts([newPost, ...posts]);
-      setPostText('');
-      setPostImage('');
-      setShowCreateModal(false);
-      Keyboard.dismiss();
-    }
   };
 
   const handleAddComment = () => {
@@ -507,7 +634,7 @@ export default function CommunityScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.headerActionButton}
-            onPress={() => setShowCreateModal(true)}
+            onPress={() => setCurrentScreen('create')}
           >
             <Feather name="plus-circle" size={22} color="#FFFFFF" />
           </TouchableOpacity>
@@ -524,88 +651,6 @@ export default function CommunityScreen() {
         ))}
         <View style={{ height: 100 }} />
       </ScrollView>
-
-      {/* Create Post Modal */}
-      <Modal visible={showCreateModal} transparent animationType="slide" onDismiss={() => Keyboard.dismiss()}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Create Post</Text>
-              <TouchableOpacity onPress={() => { setShowCreateModal(false); setPostText(''); setPostImage(''); Keyboard.dismiss(); }}>
-                <Feather name="x" size={24} color="#000000" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={styles.modalScrollView} showsVerticalScrollIndicator={false}>
-              {/* Author Info */}
-              <View style={styles.authorPreview}>
-                <Image source={{ uri: 'https://i.pravatar.cc/150?img=0' }} style={styles.authorPreviewAvatar} />
-                <View>
-                  <Text style={[styles.authorPreviewName, { color: '#000000' }]}>You</Text>
-                  <Text style={[styles.authorPreviewHandle, { color: '#667781' }]}>@your_username</Text>
-                </View>
-              </View>
-
-              {/* Post Text Input */}
-              <TextInput
-                style={[styles.postTextInput, { color: '#000000' }]}
-                placeholder="What's on your mind?"
-                placeholderTextColor="#8696A0"
-                multiline
-                maxLength={500}
-                value={postText}
-                onChangeText={setPostText}
-                autoFocus
-              />
-
-              {/* Character Count */}
-              <Text style={[styles.charCount, { color: postText.length > 450 ? '#E74C3C' : '#8696A0' }]}>
-                {postText.length}/500
-              </Text>
-
-              {/* Image Preview */}
-              {postImage ? (
-                <View style={styles.imagePreview}>
-                  <Image source={{ uri: postImage }} style={styles.imagePreviewImage} />
-                  <TouchableOpacity
-                    style={styles.removeImageButton}
-                    onPress={() => setPostImage('')}
-                  >
-                    <Feather name="x" size={20} color="#FFFFFF" />
-                  </TouchableOpacity>
-                </View>
-              ) : null}
-
-              {/* Action Buttons */}
-              <View style={styles.createPostActions}>
-                <TouchableOpacity
-                  onPress={() => setPostImage(`https://picsum.photos/400/500?random=${Date.now()}`)}
-                >
-                  <Feather name="image" size={24} color="#00A884" />
-                </TouchableOpacity>
-                <TouchableOpacity>
-                  <Feather name="smile" size={24} color="#00A884" />
-                </TouchableOpacity>
-                <TouchableOpacity>
-                  <Feather name="tag" size={24} color="#00A884" />
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-
-            {/* Post Button */}
-            <TouchableOpacity
-              style={[styles.postButton, { backgroundColor: postText.trim() ? '#00A884' : '#CCCCCC' }]}
-              onPress={() => { 
-                handleCreatePost(); 
-                Keyboard.dismiss();
-              }}
-              disabled={!postText.trim()}
-            >
-              <Text style={styles.postButtonText}>Post</Text>
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
 
       {/* Comments Modal */}
       <Modal visible={showCommentsModal} transparent animationType="slide">
@@ -835,112 +880,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingBottom: 40,
-    maxHeight: '90%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#000000',
-  },
-  modalScrollView: {
-    flex: 1,
-    paddingHorizontal: 16,
-  },
-  authorPreview: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 4,
-    paddingVertical: 12,
-    marginTop: 4,
-  },
-  authorPreviewAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginRight: 12,
-  },
-  authorPreviewName: {
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  authorPreviewHandle: {
-    fontSize: 13,
-  },
-  postTextInput: {
-    marginHorizontal: 4,
-    marginBottom: 8,
-    fontSize: 16,
-    minHeight: 120,
-    textAlignVertical: 'top',
-    paddingVertical: 12,
-  },
-  charCount: {
-    fontSize: 12,
-    textAlign: 'right',
-    marginRight: 4,
-    marginBottom: 12,
-  },
-  imagePreview: {
-    marginHorizontal: 4,
-    marginBottom: 16,
-    borderRadius: 8,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  imagePreviewImage: {
-    width: '100%',
-    height: 200,
-  },
-  removeImageButton: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  createPostActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-start',
-    gap: 16,
-    paddingHorizontal: 4,
-    paddingVertical: 12,
-    marginBottom: 12,
-  },
-  postButton: {
-    marginHorizontal: 16,
-    marginTop: 8,
-    marginBottom: 16,
-    paddingVertical: 12,
-    borderRadius: 24,
-    alignItems: 'center',
-  },
-  postButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
   commentsModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -1109,6 +1048,130 @@ const styles = StyleSheet.create({
   navLabel: {
     fontSize: 12,
     marginTop: 4,
+    fontWeight: '500',
+  },
+  // New styles for CreatePostScreen (Instagram-like)
+  createScreenContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  createTopBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#E1E1E1',
+    backgroundColor: '#FFFFFF',
+  },
+  createTopBarButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  createTopBarTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  createTopBarPostText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  createScrollView: {
+    flex: 1,
+  },
+  authorPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#E1E1E1',
+  },
+  authorPreviewAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 12,
+  },
+  authorPreviewName: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  authorPreviewHandle: {
+    fontSize: 13,
+    marginTop: 2,
+  },
+  instagramCaptionInput: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    lineHeight: 20,
+    minHeight: 100,
+    textAlignVertical: 'top',
+  },
+  charCount: {
+    fontSize: 12,
+    textAlign: 'right',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    color: '#8696A0',
+  },
+  imagePreview: {
+    marginHorizontal: 16,
+    marginVertical: 8,
+    borderRadius: 8,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  imagePreviewImage: {
+    width: '100%',
+    height: 300,
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mediaSelectionPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 200,
+    marginHorizontal: 16,
+    marginVertical: 8,
+    borderWidth: 2,
+    borderColor: '#E1E1E1',
+    borderRadius: 8,
+    borderStyle: 'dashed',
+  },
+  mediaSelectionText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#8696A0',
+  },
+  createPostActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderTopWidth: 0.5,
+    borderTopColor: '#E1E1E1',
+  },
+  actionIconButton: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  actionIconLabel: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#667781',
     fontWeight: '500',
   },
 });

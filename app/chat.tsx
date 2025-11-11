@@ -91,6 +91,34 @@ export default function ChatScreen() {
   const [showForwardModal, setShowForwardModal] = useState(false);
   const [forwardRecipients, setForwardRecipients] = useState<Set<string>>(new Set());
   const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [chatWallpaper, setChatWallpaper] = useState<{type: string, id: string | null, customUrl: string | null} | null>(null);
+
+  const wallpaperImages: { [key: string]: any } = {
+    wallpaper1: require('@/assets/images/ChatWallpaper-1.jpg'),
+    wallpaper2: require('@/assets/images/chatWallpaper-2.jpg'),
+    wallpaper3: require('@/assets/images/chatWallpaper-3.jpg'),
+    wallpaper4: require('@/assets/images/chatWallpaper-4.jpg'),
+    wallpaper5: require('@/assets/images/chatWallpaper-5.jpg'),
+    wallpaper6: require('@/assets/images/chatWallpaper-6.jpg'),
+    wallpaper7: require('@/assets/images/chatWallpaper-7.jpg'),
+    wallpaper8: require('@/assets/images/chatWallpaper-8.jpg'),
+  };
+
+  const solidColorMap = {
+    'color1': '#0A4D3C',
+    'color2': '#5E35B1',
+    'color3': '#C62828',
+    'color4': '#2E7D32',
+    'color5': '#1565C0',
+    'color6': '#6A1B9A',
+    'color7': '#D84315',
+    'color8': '#424242',
+    'color9': '#F06292',
+    'color10': '#4DB6AC',
+    'color11': '#9575CD',
+    'color12': '#4FC3F7',
+  };
+
   const mergeMessages = (existing: Message[], incoming: Message[] | Message) => {
     const incomingArr = Array.isArray(incoming) ? incoming : [incoming];
     const map = new Map<string, Message>();
@@ -227,6 +255,14 @@ export default function ChatScreen() {
         const profileResponse = await apiService.getProfile(token);
         setCurrentUserId(profileResponse.user.id);
         setCurrentUser(profileResponse.user);
+        
+        // Fetch chat wallpaper preference
+        const wallpaperResponse = await apiService.get('/auth/chat-wallpaper', token);
+        if (wallpaperResponse.ok) {
+          const wallpaperData = await wallpaperResponse.json();
+          setChatWallpaper(wallpaperData.wallpaper || { type: 'default', id: null, customUrl: null });
+        }
+        
         // Get other user info from API
         const usersResponse = await apiService.get('/auth/users', token);
         if (usersResponse.ok) {
@@ -388,10 +424,27 @@ export default function ChatScreen() {
           console.error('Failed to refetch other user info', err);
         }
       };
+      
+      const fetchWallpaper = async () => {
+        try {
+          const authToken = await authStorage.getToken();
+          if (!authToken) return;
+          const wallpaperResponse = await apiService.get('/auth/chat-wallpaper', authToken);
+          if (wallpaperResponse.ok) {
+            const wallpaperData = await wallpaperResponse.json();
+            const wallpaper = wallpaperData.wallpaper || { type: 'default', id: null, customUrl: null };
+            setChatWallpaper(wallpaper);
+          }
+        } catch (err) {
+          console.error('Failed to fetch wallpaper', err);
+        }
+      };
+      
       if (userId && currentUserId) {
         loadMessages();
         fetchOtherUser();
         checkUserOnlineStatus();
+        fetchWallpaper();
       }
     }, [userId, currentUserId])
   );
@@ -1022,11 +1075,35 @@ const emojiCategories = [
     );
   };
   return (
-    <KeyboardAvoidingView
-      style={[styles.container, { backgroundColor: isLightMode ? '#EFEAE2' : '#0B141A' }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={0}
-    >
+    <View style={[styles.container, { backgroundColor: isLightMode ? '#EFEAE2' : '#0B141A' }]}>
+      {/* Wallpaper Background */}
+      {chatWallpaper && chatWallpaper.type !== 'default' && (
+        chatWallpaper.type === 'custom' ? (
+          <Image
+            source={{ uri: chatWallpaper.customUrl }}
+            style={styles.wallpaperBackground}
+            resizeMode="cover"
+          />
+        ) : chatWallpaper.type === 'solid' ? (
+          <View
+            style={[styles.wallpaperBackground, { backgroundColor: solidColorMap[chatWallpaper.id as keyof typeof solidColorMap] || '#FFFFFF' }]}
+          />
+        ) : (
+          wallpaperImages[chatWallpaper.id || ''] && (
+            <Image
+              source={wallpaperImages[chatWallpaper.id || '']}
+              style={styles.wallpaperBackground}
+              resizeMode="cover"
+            />
+          )
+        )
+      )}
+      
+      <KeyboardAvoidingView
+        style={styles.keyboardView}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
+      >
       {/* WhatsApp-style Header */}
       <View style={[styles.header, { backgroundColor: isLightMode ? '#075E54' : '#1F2C34' }]}>
         {selectionMode ? (
@@ -1079,7 +1156,7 @@ const emojiCategories = [
       </View>
       {/* Messages Area */}
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, backgroundColor: 'transparent' }}>
           {/* Pinned Messages Section */}
           {pinnedMessages.length > 0 && (
             <View style={[styles.pinnedMessagesContainer, { backgroundColor: isLightMode ? '#F0F2F5' : '#1F2C34' }]}>
@@ -1763,11 +1840,22 @@ const emojiCategories = [
         </View>
       )}
     </KeyboardAvoidingView>
+    </View>
   );
 }
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  keyboardView: {
+    flex: 1,
+  },
+  wallpaperBackground: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   header: {
     flexDirection: 'row',
@@ -1820,15 +1908,18 @@ const styles = StyleSheet.create({
   },
   messagesList: {
     flex: 1,
+    backgroundColor: 'transparent',
   },
   messagesContent: {
     paddingHorizontal: 8,
     paddingVertical: 12,
+    backgroundColor: 'transparent',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: 'transparent',
   },
   loadingText: {
     fontSize: 15,
@@ -1838,6 +1929,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingTop: 100,
+    backgroundColor: 'transparent',
   },
   emptyText: {
     fontSize: 20,
