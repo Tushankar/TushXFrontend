@@ -35,7 +35,7 @@ export default function ContactInfoScreen() {
       }
 
       // Fetch current user profile
-      const profileResponse = await fetch('http://192.168.0.150:8080/api/auth/profile', {
+      const profileResponse = await fetch('http://192.168.29.157:8080/api/auth/profile', {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -51,7 +51,7 @@ export default function ContactInfoScreen() {
       setCurrentUser(profileData.user);
 
       // Fetch all users to find the specific contact
-      const usersResponse = await fetch('http://192.168.0.150:8080/api/auth/users', {
+      const usersResponse = await fetch('http://192.168.29.157:8080/api/auth/users', {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -120,7 +120,7 @@ export default function ContactInfoScreen() {
       if (!token) return;
 
       // Fetch all messages between current user and this contact
-      const messagesResponse = await fetch(`http://192.168.0.150:8080/api/auth/messages/${userId}`, {
+      const messagesResponse = await fetch(`http://192.168.29.157:8080/api/auth/messages/${userId}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,

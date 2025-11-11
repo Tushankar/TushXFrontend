@@ -8,6 +8,7 @@ import { ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Text, T
 import { io } from 'socket.io-client';
 import { apiService } from '../utils/api';
 import { authStorage } from '../utils/authStorage';
+
 export default function DashboardScreen() {
   const router = useRouter();
   const { colors } = useTheme();
@@ -50,7 +51,7 @@ export default function DashboardScreen() {
       // Fetch all users
       let allUsers = [];
       try {
-        const response = await fetch('http://192.168.0.150:8080/api/auth/users', {
+        const response = await fetch('http://192.168.29.157:8080/api/auth/users', {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -84,7 +85,7 @@ export default function DashboardScreen() {
       // Fetch conversations data
       let conversationsData = { conversations: [] };
       try {
-        const convResponse = await fetch('http://192.168.0.150:8080/api/auth/conversations', {
+        const convResponse = await fetch('http://192.168.29.157:8080/api/auth/conversations', {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -101,13 +102,21 @@ export default function DashboardScreen() {
       // Create map of conversations
       const convMap = new Map();
       conversationsData.conversations.forEach((conv: any) => {
-        convMap.set(conv.userId, { lastMessage: conv.lastMessage, lastMessageTime: conv.lastMessageTime, unseenCount: conv.unseenCount });
+        convMap.set(conv.userId, { 
+          lastMessage: conv.lastMessage, 
+          lastMessageTime: conv.lastMessageTime, 
+          unseenCount: conv.unseenCount,
+          messageType: conv.messageType || 'text',
+          voiceDuration: conv.voiceDuration || null
+        });
       });
       const mergedUsers = filteredUsers.map((user: any) => ({
         ...user,
         lastMessage: convMap.get(user._id)?.lastMessage || null,
         lastMessageTime: convMap.get(user._id)?.lastMessageTime || null,
-        unseenCount: convMap.get(user._id)?.unseenCount || 0
+        unseenCount: convMap.get(user._id)?.unseenCount || 0,
+        messageType: convMap.get(user._id)?.messageType || 'text',
+        voiceDuration: convMap.get(user._id)?.voiceDuration || null
       }));
       
       mergedUsers.sort((a: any, b: any) => {
@@ -124,7 +133,7 @@ export default function DashboardScreen() {
       setUsers(mergedUsers);
       // Socket setup for real-time updates
       if (!socket && currentUserData?.id) {
-        const newSocket = io('http://192.168.0.150:8080', {
+        const newSocket = io('http://192.168.29.157:8080', {
           auth: { token },
           transports: ['websocket', 'polling'],
         });
@@ -149,7 +158,9 @@ export default function DashboardScreen() {
                   ...user,
                   lastMessage: messageData.message,
                   lastMessageTime: new Date(messageData.timestamp),
-                  unseenCount: user.unseenCount + 1
+                  unseenCount: user.unseenCount + 1,
+                  messageType: messageData.messageType || 'text',
+                  voiceDuration: messageData.voiceDuration || null
                 };
               }
               return user;
@@ -223,7 +234,7 @@ export default function DashboardScreen() {
       const token = await authStorage.getToken();
       if (!token) return;
 
-      const response = await fetch(`http://192.168.0.150:8080/api/auth/conversations/${menuUser._id}/read`, {
+      const response = await fetch(`http://192.168.29.157:8080/api/auth/conversations/${menuUser._id}/read`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -250,7 +261,7 @@ export default function DashboardScreen() {
       const token = await authStorage.getToken();
       if (!token) return;
 
-      const response = await fetch(`http://192.168.0.150:8080/api/auth/conversations/${menuUser._id}/unread`, {
+      const response = await fetch(`http://192.168.29.157:8080/api/auth/conversations/${menuUser._id}/unread`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -335,12 +346,21 @@ export default function DashboardScreen() {
     }
     router.push(('/chat?userId=' + user._id + '&userName=' + encodeURIComponent(user.name)) as any);
   };
+
+  // Helper function to format voice duration
+  const formatVoiceDuration = (seconds: number | null): string => {
+    if (!seconds) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.round(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   const updateProfile = async (updates: any) => {
     try {
       const token = await authStorage.getToken();
       if (!token) return;
 
-      const response = await fetch('http://192.168.0.150:8080/api/auth/profile', {
+      const response = await fetch('http://192.168.29.157:8080/api/auth/profile', {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -544,9 +564,18 @@ export default function DashboardScreen() {
                         {currentUser?.locked?.includes(user._id) && (
                           <Feather name="lock" size={14} color={isLightMode ? '#667781' : '#8696A0'} style={{ marginRight: 4 }} />
                         )}
-                        <Text style={[styles.chatPreview, { color: isLightMode ? '#667781' : '#8696A0' }]} numberOfLines={1}>
-                          {user.lastMessage || 'Tap to open chat'}
-                        </Text>
+                        {user.messageType === 'voice' && user.voiceDuration ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                            <Feather name="mic" size={14} color={isLightMode ? '#667781' : '#8696A0'} style={{ marginRight: 4 }} />
+                            <Text style={[styles.chatPreview, { color: isLightMode ? '#667781' : '#8696A0' }]} numberOfLines={1}>
+                              Voice message ({formatVoiceDuration(user.voiceDuration)})
+                            </Text>
+                          </View>
+                        ) : (
+                          <Text style={[styles.chatPreview, { color: isLightMode ? '#667781' : '#8696A0' }]} numberOfLines={1}>
+                            {user.lastMessage || 'Tap to open chat'}
+                          </Text>
+                        )}
                         {user.lastMessageTime && (
                           <Text style={[styles.chatTime, { color: isLightMode ? '#667781' : '#8696A0' }]}>
                             {new Date(user.lastMessageTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

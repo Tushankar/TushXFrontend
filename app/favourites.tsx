@@ -64,7 +64,7 @@ export default function FavouritesScreen() {
       }
 
       // Fetch current user profile to get user id
-      const profileResponse = await fetch('http://192.168.0.150:8080/api/auth/profile', {
+      const profileResponse = await fetch('http://192.168.29.157:8080/api/auth/profile', {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${authToken}`,

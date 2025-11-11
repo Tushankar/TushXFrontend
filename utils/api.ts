@@ -1,6 +1,6 @@
 // For mobile development, use your computer's IP address instead of localhost
 // Replace with your actual IP address (run `ipconfig` on Windows to find it)
-const API_BASE_URL = 'http://192.168.0.150:8080/api'; // Your computer's IP address
+const API_BASE_URL = 'http://192.168.29.157:8080/api'; // Your computer's IP address
 
 export interface SignupData {
   name: string;

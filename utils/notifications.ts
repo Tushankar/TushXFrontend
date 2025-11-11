@@ -94,7 +94,7 @@ export const registerPushToken = async (token: string): Promise<boolean> => {
     }
 
     // Use the API_BASE_URL from apiService by creating a temporary request
-    const API_BASE_URL = 'http://192.168.0.150:8080/api'; // Same as in api.ts
+    const API_BASE_URL = 'http://192.168.29.157:8080/api'; // Same as in api.ts
 
     const response = await fetch(`${API_BASE_URL}/auth/push/register`, {
       method: 'POST',

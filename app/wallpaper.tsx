@@ -224,7 +224,7 @@ export default function WallpaperScreen() {
         } as any);
 
         // Upload image
-        const response = await fetch(`http://192.168.0.150:8080/api/auth/wallpaper`, {
+        const response = await fetch(`http://192.168.29.157:8080/api/auth/wallpaper`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,

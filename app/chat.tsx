@@ -7,11 +7,17 @@ import { Alert, Clipboard, FlatList, Image, Keyboard, KeyboardAvoidingView, Moda
 import { io, Socket } from 'socket.io-client';
 import { authStorage } from '@/utils/authStorage';
 import { apiService } from '@/utils/api';
+import { VoiceMessage } from '@/components/voice-message';
+import { VoiceRecorder } from '@/components/voice-recorder';
 interface Message {
   id: string;
   from: string;
   to: string;
   message: string;
+  voiceUrl?: string;
+  voiceDuration?: number;
+  voiceListenedBy?: string[]; // Array of user IDs who have listened to the voice message
+  messageType?: 'text' | 'voice'; // New field for message type
   replyTo?: {
     id: string;
     from: string;
@@ -92,6 +98,9 @@ export default function ChatScreen() {
   const [forwardRecipients, setForwardRecipients] = useState<Set<string>>(new Set());
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [chatWallpaper, setChatWallpaper] = useState<{type: string, id: string | null, customUrl: string | null} | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [playingVoiceMessageId, setPlayingVoiceMessageId] = useState<string | null>(null);
 
   const wallpaperImages: { [key: string]: any } = {
     wallpaper1: require('@/assets/images/ChatWallpaper-1.jpg'),
@@ -208,7 +217,7 @@ export default function ChatScreen() {
         const data = await response.json();
         const parsedMessages = data.messages.map((msg: any) => ({
           ...msg,
-          id: msg.id,
+          id: msg.id || msg._id,
           timestamp: new Date(msg.timestamp),
           status: msg.status || 'sent',
           deliveredAt: msg.deliveredAt ? new Date(msg.deliveredAt) : undefined,
@@ -217,6 +226,10 @@ export default function ChatScreen() {
           favourite: msg.favourite || false,
           isForwarded: msg.isForwarded || false,
           forwardedFrom: msg.forwardedFrom || null,
+          messageType: msg.messageType || (msg.voiceUrl ? 'voice' : 'text'),
+          voiceUrl: msg.voiceUrl,
+          voiceDuration: msg.voiceDuration || 0,
+          voiceListenedBy: msg.voiceListenedBy || [],
           replyTo: msg.replyTo ? {
             ...msg.replyTo,
             timestamp: new Date(msg.replyTo.timestamp),
@@ -280,7 +293,7 @@ export default function ChatScreen() {
         // Initialize Socket.IO connection
         console.log('Initializing socket with token:', token ? 'present' : 'missing');
        
-        const newSocket = io('http://192.168.0.150:8080', {
+        const newSocket = io('http://192.168.29.157:8080', {
           auth: { token },
           transports: ['websocket', 'polling'],
         });
@@ -300,17 +313,61 @@ export default function ChatScreen() {
         });
         newSocket.on('messageSent', (data: { messageId: string, dbId: string, status: string }) => {
           console.log('Message sent confirmation:', data);
-          setMessages(prev => prev.map(msg =>
-            msg.id === data.messageId ? { ...msg, id: data.dbId, status: 'sent' as const } : msg
-          ));
+          setMessages(prev => prev.map(msg => {
+            if (msg.id === data.messageId) {
+              // Preserve all message data including voice message fields when updating ID
+              return {
+                ...msg,
+                id: data.dbId,
+                status: 'sent' as const
+              };
+            }
+            return msg;
+          }));
         });
         newSocket.on('receiveMessage', (messageData: any) => {
           console.log('Received message:', messageData);
-          const processedMessage = {
+          const processedMessage: Message = {
             id: messageData.id,
             from: messageData.from,
             to: messageData.to,
             message: messageData.message,
+            voiceUrl: messageData.voiceUrl,
+            voiceDuration: messageData.voiceDuration,
+            messageType: messageData.messageType || 'text',
+            replyTo: messageData.replyTo || null,
+            isForwarded: messageData.isForwarded || false,
+            forwardedFrom: messageData.forwardedFrom || null,
+            timestamp: new Date(messageData.timestamp),
+            status: messageData.status || 'delivered',
+            deliveredAt: messageData.deliveredAt ? new Date(messageData.deliveredAt) : undefined,
+            pinned: messageData.pinned || false,
+            favourite: messageData.favourite || false,
+          };
+          setMessages(prev => mergeMessages(prev, processedMessage));
+          if (processedMessage.pinned) {
+            setPinnedMessages(prev => [processedMessage, ...prev.filter(msg => msg.id !== processedMessage.id)]);
+          }
+          // Auto-mark as delivered
+          if (messageData.id) {
+            newSocket.emit('messageDelivered', { messageId: messageData.id, from: messageData.from });
+          }
+          // Scroll to bottom when receiving new message
+          setTimeout(() => {
+            flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+          }, 100);
+        });
+        newSocket.on('receiveVoiceMessage', (messageData: any) => {
+          console.log('Received voice message:', messageData);
+          const processedMessage: Message = {
+            id: messageData.id,
+            from: messageData.from,
+            to: messageData.to,
+            message: '[Voice Message]',
+            voiceUrl: messageData.voiceUrl,
+            voiceDuration: messageData.voiceDuration,
+            voiceListenedBy: messageData.voiceListenedBy || [],
+            messageType: 'voice',
             replyTo: messageData.replyTo || null,
             isForwarded: messageData.isForwarded || false,
             forwardedFrom: messageData.forwardedFrom || null,
@@ -520,6 +577,9 @@ export default function ChatScreen() {
     fetchUsers();
   }, []);
 
+  // Note: Recording timer is now managed by VoiceRecorder component
+  // recordingTime state is kept for compatibility but not actively used
+
   const toggleMessageSelection = async (messageId: string) => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     
@@ -602,6 +662,130 @@ export default function ChatScreen() {
       Alert.alert('Error', 'Failed to forward messages');
     }
   };
+  const sendVoiceMessage = async (voiceUri: string, duration: number) => {
+    if (!socket) {
+      Alert.alert('Error', 'Connection not established');
+      return;
+    }
+
+    try {
+      setIsRecording(true);
+      const messageId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      
+      console.log('Starting voice message send:', { voiceUri, duration, messageId });
+      
+      // Create FormData to upload voice file
+      const formData = new FormData();
+      const fileName = `voice_${messageId}.m4a`;
+      formData.append('voiceMessage', {
+        uri: voiceUri,
+        name: fileName,
+        type: 'audio/m4a',
+      } as any);
+      
+      // Upload voice file to server
+      const authToken = await authStorage.getToken();
+      if (!authToken) {
+        Alert.alert('Error', 'Not authenticated');
+        return;
+      }
+
+      const uploadResponse = await fetch('http://192.168.29.157:8080/api/auth/voice-message', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: formData,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error('Failed to upload voice message');
+      }
+
+      const uploadData = await uploadResponse.json();
+      const voiceUrl = uploadData.voiceUrl;
+
+      console.log('Voice upload successful:', { voiceUrl, duration });
+
+      // Create message with voice data
+      const messageData: Message = {
+        id: messageId,
+        from: currentUserId,
+        to: userId,
+        message: '[Voice Message]',
+        voiceUrl: voiceUrl,
+        voiceDuration: duration,
+        messageType: 'voice',
+        replyTo: replyingTo || null,
+        timestamp: new Date(),
+        status: 'sending'
+      };
+
+      console.log('Adding voice message to state:', messageData);
+      setMessages(prev => mergeMessages(prev, messageData));
+      
+      // Emit socket event
+      socket.emit('sendVoiceMessage', {
+        to: userId,
+        messageId,
+        voiceUrl,
+        voiceDuration: duration,
+        replyTo: replyingTo ? replyingTo.id : null,
+      });
+
+      setReplyingTo(null);
+      
+      // Scroll to bottom
+      setTimeout(() => {
+        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      }, 100);
+    } catch (error) {
+      console.error('Failed to send voice message:', error);
+      Alert.alert('Error', 'Failed to send voice message');
+    } finally {
+      setIsRecording(false);
+    }
+  };
+
+  const handleVoiceListened = async (messageId: string) => {
+    try {
+      const token = await authStorage.getToken();
+      if (!token) return;
+
+      console.log('Voice message finished playing, marking as listened:', messageId);
+
+      // Call API to mark voice as listened
+      const response = await fetch(`http://192.168.29.157:8080/api/auth/messages/${messageId}/voice-listened`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to mark voice as listened');
+      }
+
+      const data = await response.json();
+      console.log('Voice marked as listened, response:', data);
+
+      // Update local message state
+      setMessages(prev => {
+        const updated = prev.map(msg => {
+          if (msg.id === messageId) {
+            console.log('Updating message', messageId, 'with voiceListenedBy:', data.voiceListenedBy);
+            return { ...msg, voiceListenedBy: data.voiceListenedBy };
+          }
+          return msg;
+        });
+        return updated;
+      });
+    } catch (error) {
+      console.error('Failed to mark voice as listened:', error);
+    }
+  };
+
   const sendMessage = () => {
     if (!socket || !inputMessage.trim()) return;
     const messageId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
@@ -957,6 +1141,18 @@ const emojiCategories = [
     const isMessageSelected = selectedMessages.has(item.id);
     const theirBubbleColor = isLightMode ? '#FFFFFF' : '#202C33';
     const myBubbleColor = isLightMode ? '#DCF8C6' : '#005C4B';
+    const isVoiceMessage = item.messageType === 'voice' && item.voiceUrl;
+
+    // Debug logging
+    if (item.messageType === 'voice') {
+      console.log('Voice message detected:', {
+        id: item.id,
+        messageType: item.messageType,
+        voiceUrl: item.voiceUrl,
+        voiceDuration: item.voiceDuration,
+        isVoiceMessage
+      });
+    }
 
     const handlePress = () => {
       if (selectionMode) {
@@ -1025,7 +1221,8 @@ const emojiCategories = [
             isMine
               ? [styles.myMessageBubble, { backgroundColor: myBubbleColor }]
               : [styles.theirMessageBubble, { backgroundColor: theirBubbleColor }],
-            isMessageSelected && styles.selectedMessage
+            isMessageSelected && styles.selectedMessage,
+            isVoiceMessage && styles.voiceMessageBubble,
           ]}
         >
           {item.isForwarded && (
@@ -1044,32 +1241,68 @@ const emojiCategories = [
                   {item.replyTo.from === currentUserId ? 'You' : (item.replyTo.fromUser?.name || 'Unknown')}
                 </Text>
                 <Text style={[styles.repliedMessageText, { color: isLightMode ? '#667781' : '#8696A0' }]} numberOfLines={1}>
-                  {item.replyTo.message}
+                  {item.replyTo.message || 'Voice message'}
                 </Text>
               </View>
             </View>
           )}
-          <Text style={[
-            styles.messageText,
-            { color: isMine ? (isLightMode ? '#000000' : '#E9EDEF') : (isLightMode ? '#000000' : '#E9EDEF') }
-          ]}>
-            {item.message}
-          </Text>
-          <View style={styles.messageFooter}>
-            {item.pinned && (
-              <Feather name="map-pin" size={12} color={isMine ? (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(233,237,239,0.6)') : (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(134,150,160,0.8)')} style={styles.pinIndicator} />
-            )}
-            {item.favourite && (
-              <Feather name="star" size={12} color="#FFD700" style={styles.favouriteIndicator} />
-            )}
-            <Text style={[
-              styles.messageTime,
-              { color: isMine ? (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(233,237,239,0.6)') : (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(134,150,160,0.8)') }
-            ]}>
-              {item.timestamp instanceof Date ? item.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Invalid time'}
-            </Text>
-            {renderStatusTicks()}
-          </View>
+          
+          {isVoiceMessage ? (
+            <View>
+              <VoiceMessage
+                messageId={item.id}
+                voiceUrl={item.voiceUrl!}
+                duration={item.voiceDuration || 0}
+                isPlaying={playingVoiceMessageId === item.id}
+                onPlay={() => setPlayingVoiceMessageId(item.id)}
+                onPause={() => setPlayingVoiceMessageId(null)}
+                isMine={isMine}
+                isLightMode={isLightMode}
+                voiceListenedBy={item.voiceListenedBy || []}
+                currentUserId={currentUserId}
+                onVoiceListened={handleVoiceListened}
+              />
+              <View style={styles.messageFooter}>
+                {item.pinned && (
+                  <Feather name="map-pin" size={12} color={isMine ? (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(233,237,239,0.6)') : (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(134,150,160,0.8)')} style={styles.pinIndicator} />
+                )}
+                {item.favourite && (
+                  <Feather name="star" size={12} color="#FFD700" style={styles.favouriteIndicator} />
+                )}
+                <Text style={[
+                  styles.messageTime,
+                  { color: isMine ? (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(233,237,239,0.6)') : (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(134,150,160,0.8)') }
+                ]}>
+                  {item.timestamp instanceof Date ? item.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Invalid time'}
+                </Text>
+                {renderStatusTicks()}
+              </View>
+            </View>
+          ) : (
+            <>
+              <Text style={[
+                styles.messageText,
+                { color: isMine ? (isLightMode ? '#000000' : '#E9EDEF') : (isLightMode ? '#000000' : '#E9EDEF') }
+              ]}>
+                {item.message}
+              </Text>
+              <View style={styles.messageFooter}>
+                {item.pinned && (
+                  <Feather name="map-pin" size={12} color={isMine ? (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(233,237,239,0.6)') : (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(134,150,160,0.8)')} style={styles.pinIndicator} />
+                )}
+                {item.favourite && (
+                  <Feather name="star" size={12} color="#FFD700" style={styles.favouriteIndicator} />
+                )}
+                <Text style={[
+                  styles.messageTime,
+                  { color: isMine ? (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(233,237,239,0.6)') : (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(134,150,160,0.8)') }
+                ]}>
+                  {item.timestamp instanceof Date ? item.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Invalid time'}
+                </Text>
+                {renderStatusTicks()}
+              </View>
+            </>
+          )}
         </View>
       </TouchableOpacity>
     );
@@ -1078,7 +1311,7 @@ const emojiCategories = [
     <View style={[styles.container, { backgroundColor: isLightMode ? '#EFEAE2' : '#0B141A' }]}>
       {/* Wallpaper Background */}
       {chatWallpaper && chatWallpaper.type !== 'default' && (
-        chatWallpaper.type === 'custom' ? (
+        chatWallpaper.type === 'custom' && chatWallpaper.customUrl ? (
           <Image
             source={{ uri: chatWallpaper.customUrl }}
             style={styles.wallpaperBackground}
@@ -1251,48 +1484,63 @@ const emojiCategories = [
       )}
       {/* WhatsApp-style Input Bar */}
       <View style={[styles.inputBar, { backgroundColor: isLightMode ? '#F0F2F5' : '#1F2C34', borderTopColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}>
-        <View style={[styles.inputWrapper, { backgroundColor: isLightMode ? '#FFFFFF' : '#2A3942' }]}>
-          <TouchableOpacity style={styles.emojiButton} onPress={() => {
-            setShowEmojiPicker(!showEmojiPicker);
-            if (!showEmojiPicker && emojis.length === 0) {
-              fetchEmojis();
-              setSelectedEmojiCategory('faces');
-            }
-          }}>
-            <Feather name="smile" size={24} color={isLightMode ? '#8696A0' : '#8696A0'} />
-          </TouchableOpacity>
-        
-          <TextInput
-            style={[styles.messageInput, { color: isLightMode ? '#000000' : '#E9EDEF' }]}
-            value={inputMessage}
-            onChangeText={setInputMessage}
-            placeholder="Message"
-            placeholderTextColor={isLightMode ? '#8696A0' : '#667781'}
-            multiline
-            maxLength={1000}
+        {isRecording ? (
+          // Full recording UI with waveform, cancel and send buttons
+          <VoiceRecorder
+            onVoiceRecorded={sendVoiceMessage}
+            isLightMode={isLightMode}
+            onRecordingStart={() => setIsRecording(true)}
+            onRecordingEnd={() => setIsRecording(false)}
           />
-        
-          <TouchableOpacity style={styles.attachButton}>
-            <Feather name="paperclip" size={22} color={isLightMode ? '#8696A0' : '#8696A0'} />
-          </TouchableOpacity>
-        
-          {!inputMessage.trim() && (
-            <TouchableOpacity style={styles.cameraButton}>
-              <Feather name="camera" size={22} color={isLightMode ? '#8696A0' : '#8696A0'} />
-            </TouchableOpacity>
-          )}
-        </View>
-        {inputMessage.trim() ? (
-          <TouchableOpacity
-            style={[styles.sendButton, { backgroundColor: isLightMode ? '#25D366' : '#00A884' }]}
-            onPress={sendMessage}
-          >
-            <Feather name="send" size={20} color="#FFFFFF" />
-          </TouchableOpacity>
         ) : (
-          <TouchableOpacity style={[styles.voiceButton, { backgroundColor: isLightMode ? '#25D366' : '#00A884' }]}>
-            <Feather name="mic" size={22} color="#FFFFFF" />
-          </TouchableOpacity>
+          <>
+            <View style={[styles.inputWrapper, { backgroundColor: isLightMode ? '#FFFFFF' : '#2A3942' }]}>
+              <TouchableOpacity style={styles.emojiButton} onPress={() => {
+                setShowEmojiPicker(!showEmojiPicker);
+                if (!showEmojiPicker && emojis.length === 0) {
+                  fetchEmojis();
+                  setSelectedEmojiCategory('faces');
+                }
+              }}>
+                <Feather name="smile" size={24} color={isLightMode ? '#8696A0' : '#8696A0'} />
+              </TouchableOpacity>
+            
+              <TextInput
+                style={[styles.messageInput, { color: isLightMode ? '#000000' : '#E9EDEF' }]}
+                value={inputMessage}
+                onChangeText={setInputMessage}
+                placeholder="Message"
+                placeholderTextColor={isLightMode ? '#8696A0' : '#667781'}
+                multiline
+                maxLength={1000}
+              />
+            
+              <TouchableOpacity style={styles.attachButton}>
+                <Feather name="paperclip" size={22} color={isLightMode ? '#8696A0' : '#8696A0'} />
+              </TouchableOpacity>
+            
+              {!inputMessage.trim() && (
+                <TouchableOpacity style={styles.cameraButton}>
+                  <Feather name="camera" size={22} color={isLightMode ? '#8696A0' : '#8696A0'} />
+                </TouchableOpacity>
+              )}
+            </View>
+            {inputMessage.trim() ? (
+              <TouchableOpacity
+                style={[styles.sendButton, { backgroundColor: isLightMode ? '#25D366' : '#00A884' }]}
+                onPress={sendMessage}
+              >
+                <Feather name="send" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+            ) : (
+              <VoiceRecorder
+                onVoiceRecorded={sendVoiceMessage}
+                isLightMode={isLightMode}
+                onRecordingStart={() => setIsRecording(true)}
+                onRecordingEnd={() => setIsRecording(false)}
+              />
+            )}
+          </>
         )}
       </View>
       {/* Emoji Picker Modal */}
@@ -1649,6 +1897,33 @@ const emojiCategories = [
                 {messageInfo?.readAt ? new Date(messageInfo.readAt).toLocaleString() : 'Not read yet'}
               </Text>
             </View>
+            {messageInfo?.messageType === 'voice' && messageInfo?.from === currentUserId && (() => {
+              console.log('Voice message info debug:', {
+                voiceListenedBy: messageInfo?.voiceListenedBy,
+                to: messageInfo?.to,
+                from: messageInfo?.from,
+                currentUserId,
+                includes: messageInfo?.voiceListenedBy?.includes(messageInfo?.to),
+              });
+              return (
+              <View style={styles.infoRow}>
+                <Feather 
+                  name="headphones" 
+                  size={16} 
+                  color={messageInfo?.voiceListenedBy?.includes(messageInfo?.to) ? '#25D366' : (isLightMode ? '#667781' : '#8696A0')}
+                />
+                <Text style={[styles.infoLabel, { color: isLightMode ? '#667781' : '#8696A0' }]}>Played</Text>
+                <Text style={[
+                  styles.infoValue, 
+                  { 
+                    color: messageInfo?.voiceListenedBy?.includes(messageInfo?.to) ? '#25D366' : (isLightMode ? '#999999' : '#666666')
+                  }
+                ]}>
+                  {messageInfo?.voiceListenedBy?.includes(messageInfo?.to) ? 'Yes' : 'Not played yet'}
+                </Text>
+              </View>
+              );
+            })()}
             <TouchableOpacity
               style={[styles.infoCloseButton, { backgroundColor: isLightMode ? '#25D366' : '#00A884' }]}
               onPress={() => setInfoVisible(false)}
@@ -1973,6 +2248,11 @@ const styles = StyleSheet.create({
   theirMessageBubble: {
     // All corners rounded
   },
+  voiceMessageBubble: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    minWidth: 250,
+  },
   selectedMessage: {
     opacity: 0.7,
   },
@@ -2060,6 +2340,25 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  recordingIndicator: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+  },
+  recordingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  recordingIndicatorText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
   },
   voiceButton: {
     width: 48,
