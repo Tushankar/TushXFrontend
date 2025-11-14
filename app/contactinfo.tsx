@@ -19,6 +19,7 @@ export default function ContactInfoScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [chatStats, setChatStats] = useState<any>(null);
   const isLightMode = colors.background === '#FFFFFF' || colors.background === '#fff';
   useEffect(() => {
     fetchContactInfo();
@@ -35,7 +36,7 @@ export default function ContactInfoScreen() {
       }
 
       // Fetch current user profile
-      const profileResponse = await fetch('http://192.168.29.157:8080/api/auth/profile', {
+      const profileResponse = await fetch('http://192.168.0.150:8080/api/auth/profile', {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -51,7 +52,7 @@ export default function ContactInfoScreen() {
       setCurrentUser(profileData.user);
 
       // Fetch all users to find the specific contact
-      const usersResponse = await fetch('http://192.168.29.157:8080/api/auth/users', {
+      const usersResponse = await fetch('http://192.168.0.150:8080/api/auth/users', {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -82,6 +83,14 @@ export default function ContactInfoScreen() {
       } catch (favouritesError) {
         console.error('Failed to fetch starred messages count:', favouritesError);
         setStarredMessagesCount(0);
+      }
+
+      // Fetch chat statistics
+      try {
+        const statsData = await apiService.getChatStats(token, userId);
+        setChatStats(statsData.stats);
+      } catch (statsError) {
+        console.error('Failed to fetch chat stats:', statsError);
       }
     } catch (error) {
       console.error('Failed to fetch contact info:', error);
@@ -120,7 +129,7 @@ export default function ContactInfoScreen() {
       if (!token) return;
 
       // Fetch all messages between current user and this contact
-      const messagesResponse = await fetch(`http://192.168.29.157:8080/api/auth/messages/${userId}`, {
+      const messagesResponse = await fetch(`http://192.168.0.150:8080/api/auth/messages/${userId}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -286,7 +295,10 @@ export default function ContactInfoScreen() {
         {/* Media Section */}
         <View style={styles.sectionGap} />
         <View style={[styles.section, { backgroundColor: isLightMode ? '#FFFFFF' : '#1F2C34' }]}>
-          <TouchableOpacity style={[styles.listItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}>
+          <TouchableOpacity 
+            style={[styles.listItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+            onPress={() => router.push(`/media-viewer?userId=${userId}&userName=${encodeURIComponent(user.name)}` as any)}
+          >
             <View style={styles.listItemLeft}>
               <Feather name="image" size={20} color={isLightMode ? '#54656F' : '#8696A0'} />
               <Text style={[styles.listItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>
@@ -294,7 +306,9 @@ export default function ContactInfoScreen() {
               </Text>
             </View>
             <View style={styles.listItemRight}>
-              <Text style={[styles.listItemCount, { color: isLightMode ? '#667781' : '#8696A0' }]}>0</Text>
+              <Text style={[styles.listItemCount, { color: isLightMode ? '#667781' : '#8696A0' }]}>
+                {chatStats ? (chatStats.imageCount + chatStats.voiceCount + chatStats.linkCount) : 0}
+              </Text>
               <Feather name="chevron-right" size={20} color={isLightMode ? '#8696A0' : '#667781'} />
             </View>
           </TouchableOpacity>

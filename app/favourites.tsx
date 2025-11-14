@@ -64,7 +64,7 @@ export default function FavouritesScreen() {
       }
 
       // Fetch current user profile to get user id
-      const profileResponse = await fetch('http://192.168.29.157:8080/api/auth/profile', {
+      const profileResponse = await fetch('http://192.168.0.150:8080/api/auth/profile', {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${authToken}`,
@@ -128,6 +128,8 @@ export default function FavouritesScreen() {
 
   const renderFavouriteMessage = ({ item }: { item: Message }) => {
     const otherUser = item.from === currentUserId ? item.toUser : item.fromUser;
+    const isVoiceMessage = item.messageType === 'voice' && item.voiceUrl;
+    const isImageMessage = item.messageType === 'image' && item.imageUrl;
 
     return (
       <TouchableOpacity
@@ -159,9 +161,31 @@ export default function FavouritesScreen() {
           </View>
           <Feather name="star" size={20} color="#FFD700" />
         </View>
-        <Text style={[styles.messageText, { color: isLightMode ? '#000000' : '#E9EDEF' }]} numberOfLines={2}>
-          {item.message}
-        </Text>
+        
+        {isVoiceMessage ? (
+          <View style={styles.voiceMessageContainer}>
+            <Feather name="mic" size={16} color={isLightMode ? '#25D366' : '#00A884'} />
+            <Text style={[styles.messageText, { color: isLightMode ? '#000000' : '#E9EDEF', marginLeft: 8 }]}>
+              Voice Message • {Math.floor((item.voiceDuration || 0) / 60)}:{String((item.voiceDuration || 0) % 60).padStart(2, '0')}
+            </Text>
+          </View>
+        ) : isImageMessage ? (
+          <View style={styles.imageMessageContainer}>
+            <Image
+              source={{ uri: item.imageUrl }}
+              style={styles.favouriteImage}
+              resizeMode="cover"
+            />
+            <View style={styles.imageMessageOverlay}>
+              <Feather name="image" size={16} color="#FFFFFF" />
+              <Text style={styles.imageMessageText}>Image</Text>
+            </View>
+          </View>
+        ) : (
+          <Text style={[styles.messageText, { color: isLightMode ? '#000000' : '#E9EDEF' }]} numberOfLines={2}>
+            {item.message}
+          </Text>
+        )}
       </TouchableOpacity>
     );
   };
@@ -303,5 +327,35 @@ const styles = StyleSheet.create({
   messageText: {
     fontSize: 14,
     lineHeight: 20,
+  },
+  voiceMessageContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  imageMessageContainer: {
+    position: 'relative',
+    marginTop: 8,
+  },
+  favouriteImage: {
+    width: '100%',
+    height: 120,
+    borderRadius: 8,
+  },
+  imageMessageOverlay: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  imageMessageText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    marginLeft: 4,
   },
 });

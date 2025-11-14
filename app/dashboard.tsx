@@ -13,6 +13,7 @@ export default function DashboardScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const [users, setUsers] = useState<any[]>([]);
+  const [groups, setGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -51,7 +52,7 @@ export default function DashboardScreen() {
       // Fetch all users
       let allUsers = [];
       try {
-        const response = await fetch('http://192.168.29.157:8080/api/auth/users', {
+        const response = await fetch('http://192.168.0.150:8080/api/auth/users', {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -85,7 +86,7 @@ export default function DashboardScreen() {
       // Fetch conversations data
       let conversationsData = { conversations: [] };
       try {
-        const convResponse = await fetch('http://192.168.29.157:8080/api/auth/conversations', {
+        const convResponse = await fetch('http://192.168.0.150:8080/api/auth/conversations', {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -131,9 +132,75 @@ export default function DashboardScreen() {
         return a.name.localeCompare(b.name);
       });
       setUsers(mergedUsers);
+
+      // Fetch groups
+      try {
+        const groupsResponse = await fetch('http://192.168.0.150:8080/api/auth/groups', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (groupsResponse.ok) {
+          const groupsData = await groupsResponse.json();
+          console.log('Groups fetched:', groupsData.groups);
+          
+          // Fetch last message for each group
+          const groupsWithMessages = await Promise.all(
+            (groupsData.groups || []).map(async (group: any) => {
+              try {
+                const messagesResponse = await fetch(
+                  `http://192.168.0.150:8080/api/auth/groups/${group._id}/messages`,
+                  {
+                    method: 'GET',
+                    headers: {
+                      'Authorization': `Bearer ${token}`,
+                      'Content-Type': 'application/json',
+                    },
+                  }
+                );
+                if (messagesResponse.ok) {
+                  const messagesData = await messagesResponse.json();
+                  const messages = messagesData.messages || [];
+                  if (messages.length > 0) {
+                    // Get the last message
+                    const lastMsg = messages[messages.length - 1];
+                    
+                    // Calculate unseen count (messages not read by current user)
+                    const unseenCount = messages.filter((msg: any) => {
+                      const isFromOthers = msg.from !== currentUserDataFetched.id;
+                      const isNotRead = !msg.readBy?.some((r: any) => r.userId === currentUserDataFetched.id || r.userId?._id === currentUserDataFetched.id);
+                      return isFromOthers && isNotRead;
+                    }).length;
+                    
+                    console.log(`Group ${group.name}: Total messages=${messages.length}, Current User=${currentUserDataFetched.id}, Unseen=${unseenCount}`);
+                    
+                    return {
+                      ...group,
+                      lastMessage: lastMsg.message || '',
+                      lastMessageTime: lastMsg.timestamp || group.updatedAt,
+                      messageType: lastMsg.messageType || 'text',
+                      voiceDuration: lastMsg.voiceDuration || null,
+                      unseenCount: unseenCount
+                    };
+                  }
+                }
+              } catch (err) {
+                console.log(`Could not fetch messages for group ${group._id}:`, err);
+              }
+              return { ...group, unseenCount: 0 };
+            })
+          );
+          
+          setGroups(groupsWithMessages);
+        }
+      } catch (err) {
+        console.log('Could not fetch groups:', err);
+      }
       // Socket setup for real-time updates
       if (!socket && currentUserData?.id) {
-        const newSocket = io('http://192.168.29.157:8080', {
+        const newSocket = io('http://192.168.0.150:8080', {
           auth: { token },
           transports: ['websocket', 'polling'],
         });
@@ -182,10 +249,94 @@ export default function DashboardScreen() {
           });
         });
 
+        newSocket.on('receiveGroupMessage', (messageData: any) => {
+          console.log('Dashboard received new group message:', messageData);
+          // Update the group data with last message info
+          setGroups(prev => {
+            const updated = prev.map(group => {
+              if (group._id === messageData.group) {
+                return {
+                  ...group,
+                  lastMessage: messageData.message,
+                  lastMessageTime: new Date(messageData.timestamp),
+                  messageType: messageData.messageType || 'text',
+                  voiceDuration: messageData.voiceDuration || null,
+                  unseenCount: messageData.from !== currentUser?.id ? (group.unseenCount || 0) + 1 : group.unseenCount || 0
+                };
+              }
+              return group;
+            });
+            
+            // Re-sort the updated list (groups are sorted in the render function with users)
+            return updated;
+          });
+        });
+
+        newSocket.on('receiveGroupVoiceMessage', (messageData: any) => {
+          console.log('Dashboard received new group voice message:', messageData);
+          // Update the group data with last voice message info
+          setGroups(prev => {
+            const updated = prev.map(group => {
+              if (group._id === messageData.group) {
+                return {
+                  ...group,
+                  lastMessage: messageData.message,
+                  lastMessageTime: new Date(messageData.timestamp),
+                  messageType: 'voice',
+                  voiceDuration: messageData.voiceDuration || null,
+                  unseenCount: messageData.from !== currentUser?.id ? (group.unseenCount || 0) + 1 : group.unseenCount || 0
+                };
+              }
+              return group;
+            });
+            
+            return updated;
+          });
+        });
+
+        newSocket.on('receiveGroupImageMessage', (messageData: any) => {
+          console.log('Dashboard received new group image message:', messageData);
+          // Update the group data with last image message info
+          setGroups(prev => {
+            const updated = prev.map(group => {
+              if (group._id === messageData.group) {
+                return {
+                  ...group,
+                  lastMessage: messageData.message,
+                  lastMessageTime: new Date(messageData.timestamp),
+                  messageType: 'image',
+                  voiceDuration: null,
+                  unseenCount: messageData.from !== currentUser?.id ? (group.unseenCount || 0) + 1 : group.unseenCount || 0
+                };
+              }
+              return group;
+            });
+            
+            return updated;
+          });
+        });
+
         newSocket.on('conversationUpdate', (data: { userId: string, action: string }) => {
           console.log('Dashboard received conversation update:', data);
           // Refresh conversations when messages are read or other updates
           loadUsers();
+        });
+
+        newSocket.on('groupMessagesRead', (data: { groupId: string }) => {
+          console.log('Dashboard received group messages read event:', data);
+          console.log('Current groups before update:', groups);
+          // Reset unseenCount for the group
+          setGroups(prev => {
+            const updated = prev.map(group => {
+              if (group._id === data.groupId) {
+                console.log(`Updating unseenCount for group ${data.groupId} from ${group.unseenCount} to 0`);
+                return { ...group, unseenCount: 0 };
+              }
+              return group;
+            });
+            console.log('Groups after update:', updated);
+            return updated;
+          });
         });
 
         setSocket(newSocket);
@@ -234,7 +385,7 @@ export default function DashboardScreen() {
       const token = await authStorage.getToken();
       if (!token) return;
 
-      const response = await fetch(`http://192.168.29.157:8080/api/auth/conversations/${menuUser._id}/read`, {
+      const response = await fetch(`http://192.168.0.150:8080/api/auth/conversations/${menuUser._id}/read`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -261,7 +412,7 @@ export default function DashboardScreen() {
       const token = await authStorage.getToken();
       if (!token) return;
 
-      const response = await fetch(`http://192.168.29.157:8080/api/auth/conversations/${menuUser._id}/unread`, {
+      const response = await fetch(`http://192.168.0.150:8080/api/auth/conversations/${menuUser._id}/unread`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -360,7 +511,7 @@ export default function DashboardScreen() {
       const token = await authStorage.getToken();
       if (!token) return;
 
-      const response = await fetch('http://192.168.29.157:8080/api/auth/profile', {
+      const response = await fetch('http://192.168.0.150:8080/api/auth/profile', {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -405,16 +556,16 @@ export default function DashboardScreen() {
           <Text style={styles.headerTitle}>Chats</Text>
           <View style={styles.headerIcons}>
             <TouchableOpacity style={styles.headerIcon} onPress={() => {}}>
-              <Feather name="camera" size={22} color="#FFFFFF" />
+              <Feather name="cpu" size={22} color="#FFFFFF" />
             </TouchableOpacity>
             <TouchableOpacity style={styles.headerIcon} onPress={handleSearch}>
               <Feather name="search" size={22} color="#FFFFFF" />
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.headerIcon}
-              onPress={() => router.push('/settings' as any)}
+              onPress={() => router.push('/create-group' as any)}
             >
-              <Feather name="more-vertical" size={22} color="#FFFFFF" />
+              <Feather name="plus" size={22} color="#FFFFFF" />
             </TouchableOpacity>
           </View>
         </View>
@@ -483,7 +634,43 @@ export default function DashboardScreen() {
       ) : (
         <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           {(() => {
-            const filteredUsers = users.filter(user => {
+            // Merge groups and users, then sort them together
+            const allItems = [
+              ...groups.map(g => ({ ...g, isGroup: true })),
+              ...users
+            ].sort((a, b) => {
+              // Sort by pinned status first
+              const aPinned = currentUser?.pinned?.includes(a._id) ? 1 : 0;
+              const bPinned = currentUser?.pinned?.includes(b._id) ? 1 : 0;
+              if (aPinned !== bPinned) return bPinned - aPinned;
+              
+              // Then by last message/update time
+              const aTime = a.lastMessageTime || a.updatedAt || a.createdAt;
+              const bTime = b.lastMessageTime || b.updatedAt || b.createdAt;
+              
+              if (aTime && bTime) {
+                return new Date(bTime).getTime() - new Date(aTime).getTime();
+              }
+              if (aTime) return -1;
+              if (bTime) return 1;
+              
+              // Finally by name
+              return a.name.localeCompare(b.name);
+            });
+            const filteredItems = allItems.filter(item => {
+              if (item.isGroup) {
+                let passesCategoryFilter = false;
+                switch (filter) {
+                  case 'all': passesCategoryFilter = !currentUser?.archived?.includes(item._id); break;
+                  case 'archived': passesCategoryFilter = currentUser?.archived?.includes(item._id); break;
+                  case 'favourites': passesCategoryFilter = currentUser?.favourites?.includes(item._id); break;
+                  case 'locked': passesCategoryFilter = currentUser?.locked?.includes(item._id); break;
+                  default: passesCategoryFilter = !currentUser?.archived?.includes(item._id); break;
+                }
+                const passesSearchFilter = !searchQuery || item.name.toLowerCase().includes(searchQuery.toLowerCase());
+                return passesCategoryFilter && passesSearchFilter;
+              }
+              const user = item;
               if (user._id === currentUser?.id) return false;
               
               // First filter by category
@@ -503,7 +690,7 @@ export default function DashboardScreen() {
               
               return passesCategoryFilter && passesSearchFilter;
             });
-            if (filteredUsers.length === 0) {
+            if (filteredItems.length === 0) {
               return (
                 <View style={styles.noResultsContainer}>
                   <Feather name="search" size={48} color={isLightMode ? '#667781' : '#8696A0'} />
@@ -512,7 +699,86 @@ export default function DashboardScreen() {
                 </View>
               );
             }
-            return filteredUsers.map((user) => (
+            return filteredItems.map((item) => {
+              if (item.isGroup) {
+                return (
+                  <TouchableOpacity
+                    key={item._id}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      router.push(('/group-chat?groupId=' + item._id + '&groupName=' + encodeURIComponent(item.name)) as any);
+                    }}
+                    onLongPress={() => {
+                      setMenuUser(item);
+                      setShowMenu(true);
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    }}
+                  >
+                    <View style={[styles.chatItem, { backgroundColor: colors.background, borderBottomColor: isLightMode ? '#E9EDEF' : '#1F2C34' }]}>
+                      {item.avatarUrl && item.avatarUrl.trim() ? (
+                        <Image 
+                          source={{ uri: item.avatarUrl }} 
+                          style={styles.avatar}
+                          onError={(e) => console.log('Group image load error:', item.name, e.nativeEvent.error)}
+                        />
+                      ) : (
+                        <View style={[styles.avatar, { backgroundColor: isLightMode ? '#DFE5E7' : '#2A3942', justifyContent: 'center', alignItems: 'center' }]}>
+                          <Feather name="users" size={24} color={isLightMode ? '#54656F' : '#8696A0'} />
+                        </View>
+                      )}
+                      <View style={styles.chatContent}>
+                        <View style={styles.chatHeader}>
+                          <Text style={[styles.chatName, { color: colors.text }]} numberOfLines={1}>
+                            {item.name}
+                          </Text>
+                        </View>
+                        <View style={styles.chatFooter}>
+                          <View style={styles.chatStatusRow}>
+                            {currentUser?.pinned?.includes(item._id) && (
+                              <Feather name="map-pin" size={14} color={isLightMode ? '#667781' : '#8696A0'} style={{ marginRight: 4 }} />
+                            )}
+                            {currentUser?.locked?.includes(item._id) && (
+                              <Feather name="lock" size={14} color={isLightMode ? '#667781' : '#8696A0'} style={{ marginRight: 4 }} />
+                            )}
+                            {item.messageType === 'voice' && item.voiceDuration ? (
+                              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                                <Feather name="mic" size={14} color={isLightMode ? '#667781' : '#8696A0'} style={{ marginRight: 4 }} />
+                                <Text style={[styles.chatPreview, { color: isLightMode ? '#667781' : '#8696A0' }]} numberOfLines={1}>
+                                  Voice message ({formatVoiceDuration(item.voiceDuration)})
+                                </Text>
+                              </View>
+                            ) : item.messageType === 'image' ? (
+                              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                                <Feather name="image" size={14} color={isLightMode ? '#667781' : '#8696A0'} style={{ marginRight: 4 }} />
+                                <Text style={[styles.chatPreview, { color: isLightMode ? '#667781' : '#8696A0' }]} numberOfLines={1}>
+                                  Image
+                                </Text>
+                              </View>
+                            ) : (
+                              <Text style={[styles.chatPreview, { color: isLightMode ? '#667781' : '#8696A0' }]} numberOfLines={1}>
+                                {item.lastMessage || item.description || `${item.members?.length || 0} members`}
+                              </Text>
+                            )}
+                            {item.lastMessageTime && (
+                              <Text style={[styles.chatTime, { color: isLightMode ? '#667781' : '#8696A0' }]}>
+                                {new Date(item.lastMessageTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </Text>
+                            )}
+                          </View>
+                          {item.unseenCount > 0 && (
+                            <View style={[styles.unreadBadge, { backgroundColor: isLightMode ? '#25D366' : '#00A884' }]}>
+                              <Text style={styles.unreadCount}>{item.unseenCount}</Text>
+                            </View>
+                          )}
+                        </View>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              }
+              const user = item;
+              return (
               <TouchableOpacity
                 key={user._id || user.email}
                 activeOpacity={0.7}
@@ -571,6 +837,13 @@ export default function DashboardScreen() {
                               Voice message ({formatVoiceDuration(user.voiceDuration)})
                             </Text>
                           </View>
+                        ) : user.messageType === 'image' ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                            <Feather name="image" size={14} color={isLightMode ? '#667781' : '#8696A0'} style={{ marginRight: 4 }} />
+                            <Text style={[styles.chatPreview, { color: isLightMode ? '#667781' : '#8696A0' }]} numberOfLines={1}>
+                              Image
+                            </Text>
+                          </View>
                         ) : (
                           <Text style={[styles.chatPreview, { color: isLightMode ? '#667781' : '#8696A0' }]} numberOfLines={1}>
                             {user.lastMessage || 'Tap to open chat'}
@@ -591,7 +864,8 @@ export default function DashboardScreen() {
                   </View>
                 </View>
               </TouchableOpacity>
-            ));
+              );
+            });
           })()}
         </ScrollView>
       )}

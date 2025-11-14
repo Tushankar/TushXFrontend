@@ -1,6 +1,6 @@
 // For mobile development, use your computer's IP address instead of localhost
 // Replace with your actual IP address (run `ipconfig` on Windows to find it)
-const API_BASE_URL = 'http://192.168.29.157:8080/api'; // Your computer's IP address
+const API_BASE_URL = 'http://192.168.0.150:8080/api'; // Your computer's IP address
 
 export interface SignupData {
   name: string;
@@ -217,6 +217,15 @@ class ApiService {
 
   async getFavouriteMessages(token: string): Promise<any> {
     return this.request<any>('/auth/messages/favourites', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+  }
+
+  async getChatStats(token: string, userId: string): Promise<any> {
+    return this.request<any>(`/auth/chat-stats/${userId}`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,

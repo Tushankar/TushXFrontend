@@ -215,12 +215,12 @@ export default function SettingsScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.settingsItem, { borderBottomWidth: 0 }]}
-            onPress={() => {}}
+            onPress={() => router.push(`/media-viewer?userId=${profile?.id}&userName=${encodeURIComponent(profile?.name || 'You')}` as any)}
           >
             <View style={styles.itemLeft}>
-              <Feather name="users" size={20} color={isLightMode ? '#54656F' : '#8696A0'} />
+              <Feather name="image" size={20} color={isLightMode ? '#54656F' : '#8696A0'} />
               <Text style={[styles.itemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>
-                Account Info
+                Media, links and docs
               </Text>
             </View>
             <Feather name="chevron-right" size={20} color={isLightMode ? '#8696A0' : '#667781'} />

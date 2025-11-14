@@ -2,8 +2,9 @@ import { useTheme } from '@/constants/ThemeContext';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Clipboard, FlatList, Image, Keyboard, KeyboardAvoidingView, Modal, Platform, ScrollView, SectionList, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import { Alert, Clipboard, FlatList, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, SectionList, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 import { io, Socket } from 'socket.io-client';
 import { authStorage } from '@/utils/authStorage';
 import { apiService } from '@/utils/api';
@@ -17,7 +18,8 @@ interface Message {
   voiceUrl?: string;
   voiceDuration?: number;
   voiceListenedBy?: string[]; // Array of user IDs who have listened to the voice message
-  messageType?: 'text' | 'voice'; // New field for message type
+  messageType?: 'text' | 'voice' | 'image'; // New field for message type
+  imageUrl?: string;
   replyTo?: {
     id: string;
     from: string;
@@ -101,6 +103,10 @@ export default function ChatScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [playingVoiceMessageId, setPlayingVoiceMessageId] = useState<string | null>(null);
+  const [fullScreenImageUrl, setFullScreenImageUrl] = useState<string | null>(null);
+  const [imageDimensions, setImageDimensions] = useState<{width: number, height: number} | null>(null);
+  const [imageMenuVisible, setImageMenuVisible] = useState(false);
+  const [selectedImageMessage, setSelectedImageMessage] = useState<Message | null>(null);
 
   const wallpaperImages: { [key: string]: any } = {
     wallpaper1: require('@/assets/images/ChatWallpaper-1.jpg'),
@@ -226,10 +232,11 @@ export default function ChatScreen() {
           favourite: msg.favourite || false,
           isForwarded: msg.isForwarded || false,
           forwardedFrom: msg.forwardedFrom || null,
-          messageType: msg.messageType || (msg.voiceUrl ? 'voice' : 'text'),
+          messageType: msg.messageType || (msg.voiceUrl ? 'voice' : (msg.imageUrl ? 'image' : 'text')),
           voiceUrl: msg.voiceUrl,
           voiceDuration: msg.voiceDuration || 0,
           voiceListenedBy: msg.voiceListenedBy || [],
+          imageUrl: msg.imageUrl,
           replyTo: msg.replyTo ? {
             ...msg.replyTo,
             timestamp: new Date(msg.replyTo.timestamp),
@@ -293,7 +300,7 @@ export default function ChatScreen() {
         // Initialize Socket.IO connection
         console.log('Initializing socket with token:', token ? 'present' : 'missing');
        
-        const newSocket = io('http://192.168.29.157:8080', {
+        const newSocket = io('http://192.168.0.150:8080', {
           auth: { token },
           transports: ['websocket', 'polling'],
         });
@@ -312,18 +319,25 @@ export default function ChatScreen() {
           setIsConnected(false);
         });
         newSocket.on('messageSent', (data: { messageId: string, dbId: string, status: string }) => {
-          console.log('Message sent confirmation:', data);
-          setMessages(prev => prev.map(msg => {
-            if (msg.id === data.messageId) {
-              // Preserve all message data including voice message fields when updating ID
-              return {
-                ...msg,
-                id: data.dbId,
-                status: 'sent' as const
-              };
-            }
-            return msg;
-          }));
+          console.log('Message sent confirmation received:', data);
+          console.log('Current messages before update:', messages.length);
+          setMessages(prev => {
+            const updated = prev.map(msg => {
+              console.log('Checking message:', msg.id, 'against:', data.messageId, 'type:', msg.messageType);
+              if (msg.id === data.messageId) {
+                console.log('Updating message status to sent:', msg.id);
+                // Preserve all message data including voice message fields when updating ID
+                return {
+                  ...msg,
+                  id: data.dbId,
+                  status: 'sent' as const
+                };
+              }
+              return msg;
+            });
+            console.log('Messages after update:', updated.length);
+            return updated;
+          });
         });
         newSocket.on('receiveMessage', (messageData: any) => {
           console.log('Received message:', messageData);
@@ -368,6 +382,37 @@ export default function ChatScreen() {
             voiceDuration: messageData.voiceDuration,
             voiceListenedBy: messageData.voiceListenedBy || [],
             messageType: 'voice',
+            replyTo: messageData.replyTo || null,
+            isForwarded: messageData.isForwarded || false,
+            forwardedFrom: messageData.forwardedFrom || null,
+            timestamp: new Date(messageData.timestamp),
+            status: messageData.status || 'delivered',
+            deliveredAt: messageData.deliveredAt ? new Date(messageData.deliveredAt) : undefined,
+            pinned: messageData.pinned || false,
+            favourite: messageData.favourite || false,
+          };
+          setMessages(prev => mergeMessages(prev, processedMessage));
+          if (processedMessage.pinned) {
+            setPinnedMessages(prev => [processedMessage, ...prev.filter(msg => msg.id !== processedMessage.id)]);
+          }
+          // Auto-mark as delivered
+          if (messageData.id) {
+            newSocket.emit('messageDelivered', { messageId: messageData.id, from: messageData.from });
+          }
+          // Scroll to bottom when receiving new message
+          setTimeout(() => {
+            flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+          }, 100);
+        });
+        newSocket.on('receiveImageMessage', (messageData: any) => {
+          console.log('Received image message:', messageData);
+          const processedMessage: Message = {
+            id: messageData.id,
+            from: messageData.from,
+            to: messageData.to,
+            message: '[Image]',
+            imageUrl: messageData.imageUrl,
+            messageType: 'image',
             replyTo: messageData.replyTo || null,
             isForwarded: messageData.isForwarded || false,
             forwardedFrom: messageData.forwardedFrom || null,
@@ -640,14 +685,39 @@ export default function ChatScreen() {
         for (const msg of messagesToForward) {
           const messageId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
           
-          socket.emit('sendMessage', {
-            to: recipient,
-            message: msg.message,
-            messageId,
-            isForwarded: true,
-            forwardedFrom: msg.isForwarded ? msg.forwardedFrom?.id : msg.from,
-            replyTo: null,
-          });
+          // Handle different message types
+          if (msg.messageType === 'voice' && msg.voiceUrl) {
+            // Forward voice message
+            socket.emit('sendVoiceMessage', {
+              to: recipient,
+              messageId,
+              voiceUrl: msg.voiceUrl,
+              voiceDuration: msg.voiceDuration,
+              replyTo: null,
+              isForwarded: true,
+              forwardedFrom: msg.isForwarded ? msg.forwardedFrom?.id : msg.from,
+            });
+          } else if (msg.messageType === 'image' && msg.imageUrl) {
+            // Forward image message
+            socket.emit('sendImageMessage', {
+              to: recipient,
+              messageId,
+              imageUrl: msg.imageUrl,
+              replyTo: null,
+              isForwarded: true,
+              forwardedFrom: msg.isForwarded ? msg.forwardedFrom?.id : msg.from,
+            });
+          } else {
+            // Forward text message
+            socket.emit('sendMessage', {
+              to: recipient,
+              message: msg.message,
+              messageId,
+              isForwarded: true,
+              forwardedFrom: msg.isForwarded ? msg.forwardedFrom?.id : msg.from,
+              replyTo: null,
+            });
+          }
         }
       }
 
@@ -690,7 +760,7 @@ export default function ChatScreen() {
         return;
       }
 
-      const uploadResponse = await fetch('http://192.168.29.157:8080/api/auth/voice-message', {
+      const uploadResponse = await fetch('http://192.168.0.150:8080/api/auth/voice-message', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${authToken}`,
@@ -747,6 +817,160 @@ export default function ChatScreen() {
     }
   };
 
+  const pickImage = async () => {
+    try {
+      // Request permissions
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Camera roll permissions are required to send images');
+        return;
+      }
+
+      // Show action sheet for camera or gallery
+      Alert.alert(
+        'Select Image',
+        'Choose an option',
+        [
+          { text: 'Camera', onPress: openCamera },
+          { text: 'Gallery', onPress: openGallery },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+    } catch (error) {
+      console.error('Error requesting permissions:', error);
+      Alert.alert('Error', 'Failed to access camera/gallery');
+    }
+  };
+
+  const openCamera = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Camera permissions are required to take photos');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        await sendImageMessage(result.assets[0]);
+      }
+    } catch (error) {
+      console.error('Error opening camera:', error);
+      Alert.alert('Error', 'Failed to open camera');
+    }
+  };
+
+  const openGallery = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        await sendImageMessage(result.assets[0]);
+      }
+    } catch (error) {
+      console.error('Error opening gallery:', error);
+      Alert.alert('Error', 'Failed to open gallery');
+    }
+  };
+
+  const sendImageMessage = async (asset: ImagePicker.ImagePickerAsset) => {
+    if (!socket) {
+      Alert.alert('Error', 'Connection not established');
+      return;
+    }
+
+    console.log('Socket connected status:', socket.connected);
+    console.log('Socket ID:', socket.id);
+
+    try {
+      const messageId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+
+      console.log('Starting image message send:', { asset, messageId });
+
+      // Create FormData to upload image file
+      const formData = new FormData();
+      const fileName = `image_${messageId}.${asset.uri.split('.').pop()}`;
+      formData.append('imageMessage', {
+        uri: asset.uri,
+        name: fileName,
+        type: asset.type || 'image/jpeg',
+      } as any);
+
+      // Upload image file to server
+      const authToken = await authStorage.getToken();
+      if (!authToken) {
+        Alert.alert('Error', 'Not authenticated');
+        return;
+      }
+
+      const uploadResponse = await fetch('http://192.168.0.150:8080/api/auth/image-message', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: formData,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error('Failed to upload image');
+      }
+
+      const uploadData = await uploadResponse.json();
+      const imageUrl = uploadData.imageUrl;
+
+      console.log('Image upload successful:', { imageUrl });
+
+      // Create message with image data
+      const messageData: Message = {
+        id: messageId,
+        from: currentUserId,
+        to: userId,
+        message: '[Image]',
+        imageUrl: imageUrl,
+        messageType: 'image',
+        replyTo: replyingTo || null,
+        timestamp: new Date(),
+        status: 'sending'
+      };
+
+      console.log('Adding image message to state:', messageData);
+      setMessages(prev => mergeMessages(prev, messageData));
+
+      // Emit socket event
+      console.log('Emitting sendImageMessage socket event:', {
+        to: userId,
+        messageId,
+        imageUrl,
+        replyTo: replyingTo ? replyingTo.id : null,
+      });
+      socket.emit('sendImageMessage', {
+        to: userId,
+        messageId,
+        imageUrl,
+        replyTo: replyingTo ? replyingTo.id : null,
+      });
+
+      setReplyingTo(null);
+
+      // Scroll to bottom
+      setTimeout(() => {
+        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      }, 100);
+    } catch (error) {
+      console.error('Failed to send image message:', error);
+      Alert.alert('Error', 'Failed to send image');
+    }
+  };
+
   const handleVoiceListened = async (messageId: string) => {
     try {
       const token = await authStorage.getToken();
@@ -755,7 +979,7 @@ export default function ChatScreen() {
       console.log('Voice message finished playing, marking as listened:', messageId);
 
       // Call API to mark voice as listened
-      const response = await fetch(`http://192.168.29.157:8080/api/auth/messages/${messageId}/voice-listened`, {
+      const response = await fetch(`http://192.168.0.150:8080/api/auth/messages/${messageId}/voice-listened`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -786,9 +1010,32 @@ export default function ChatScreen() {
     }
   };
 
+  const handleImageDimensions = (event: any, imageUrl: string) => {
+    const { width, height } = event.nativeEvent.source;
+    const maxWidth = 250;
+    const scale = maxWidth / width;
+    const scaledHeight = height * scale;
+    
+    setImageDimensions({
+      width: maxWidth,
+      height: Math.min(scaledHeight, 400) // Max height of 400
+    });
+  };
+
+  const showImageMenu = async (message: Message) => {
+    setSelectedImageMessage(message);
+    setImageMenuVisible(true);
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    } catch (error) {
+      console.log('Haptic feedback not available:', error);
+    }
+  };
+
   const sendMessage = () => {
     if (!socket || !inputMessage.trim()) return;
     const messageId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+    const links = detectLinks(inputMessage.trim());
     const messageData = {
       id: messageId,
       from: currentUserId,
@@ -799,7 +1046,13 @@ export default function ChatScreen() {
       status: 'sending' as const
     };
     setMessages(prev => mergeMessages(prev, messageData));
-    socket.emit('sendMessage', { to: userId, message: inputMessage.trim(), messageId, replyTo: replyingTo ? replyingTo.id : null });
+    socket.emit('sendMessage', { 
+      to: userId, 
+      message: inputMessage.trim(), 
+      messageId, 
+      replyTo: replyingTo ? replyingTo.id : null,
+      links: links
+    });
     setInputMessage('');
     setReplyingTo(null); // Clear reply state after sending
    
@@ -1038,6 +1291,22 @@ const emojiCategories = [
     setSelectedMessageId(null);
     setSelectedMessage(null);
   };
+
+  const copyImageUrl = async (message: Message) => {
+    try {
+      if (message.imageUrl) {
+        await Clipboard.setString(message.imageUrl);
+        setShowCopyToast(true);
+        setTimeout(() => setShowCopyToast(false), 2000);
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      }
+    } catch (error) {
+      console.error('Failed to copy image URL:', error);
+      Alert.alert('Error', 'Failed to copy image URL');
+    }
+    setImageMenuVisible(false);
+    setSelectedImageMessage(null);
+  };
   const pinMessage = async (message: Message) => {
     try {
       const authToken = await authStorage.getToken();
@@ -1060,8 +1329,10 @@ const emojiCategories = [
       Alert.alert('Error', 'Failed to pin message');
     }
     setMenuVisible(false);
+    setImageMenuVisible(false);
     setSelectedMessageId(null);
     setSelectedMessage(null);
+    setSelectedImageMessage(null);
   };
   const unpinMessage = async (message: Message) => {
     try {
@@ -1082,8 +1353,10 @@ const emojiCategories = [
       Alert.alert('Error', 'Failed to unpin message');
     }
     setMenuVisible(false);
+    setImageMenuVisible(false);
     setSelectedMessageId(null);
     setSelectedMessage(null);
+    setSelectedImageMessage(null);
   };
   const favouriteMessage = async (message: Message) => {
     try {
@@ -1099,8 +1372,10 @@ const emojiCategories = [
       Alert.alert('Error', 'Failed to favourite message');
     }
     setMenuVisible(false);
+    setImageMenuVisible(false);
     setSelectedMessageId(null);
     setSelectedMessage(null);
+    setSelectedImageMessage(null);
   };
   const unfavouriteMessage = async (message: Message) => {
     try {
@@ -1116,8 +1391,10 @@ const emojiCategories = [
       Alert.alert('Error', 'Failed to unfavourite message');
     }
     setMenuVisible(false);
+    setImageMenuVisible(false);
     setSelectedMessageId(null);
     setSelectedMessage(null);
+    setSelectedImageMessage(null);
   };
   const showMessageMenu = async (message: Message) => {
     setSelectedMessage(message);
@@ -1136,12 +1413,38 @@ const emojiCategories = [
     setSelectedMessageId(null);
     setSelectedMessage(null);
   };
+
+  const detectLinks = (text: string) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    return text.match(urlRegex) || [];
+  };
+
+  const renderTextWithLinks = (text: string) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = text.split(urlRegex);
+    
+    return parts.map((part, index) => {
+      if (urlRegex.test(part)) {
+        return (
+          <Text
+            key={index}
+            style={[styles.linkText, { color: isLightMode ? '#1976D2' : '#53BDEB' }]}
+            onPress={() => Linking.openURL(part)}
+          >
+            {part}
+          </Text>
+        );
+      }
+      return part;
+    });
+  };
   const renderMessage = ({ item }: { item: Message }) => {
     const isMine = item.from === currentUserId;
     const isMessageSelected = selectedMessages.has(item.id);
     const theirBubbleColor = isLightMode ? '#FFFFFF' : '#202C33';
     const myBubbleColor = isLightMode ? '#DCF8C6' : '#005C4B';
     const isVoiceMessage = item.messageType === 'voice' && item.voiceUrl;
+    const isImageMessage = item.messageType === 'image' && item.imageUrl;
 
     // Debug logging
     if (item.messageType === 'voice') {
@@ -1223,6 +1526,7 @@ const emojiCategories = [
               : [styles.theirMessageBubble, { backgroundColor: theirBubbleColor }],
             isMessageSelected && styles.selectedMessage,
             isVoiceMessage && styles.voiceMessageBubble,
+            isImageMessage && styles.imageMessageBubble,
           ]}
         >
           {item.isForwarded && (
@@ -1278,13 +1582,45 @@ const emojiCategories = [
                 {renderStatusTicks()}
               </View>
             </View>
+          ) : isImageMessage ? (
+            <View>
+              <TouchableOpacity 
+                onPress={() => setFullScreenImageUrl(item.imageUrl || null)} 
+                onLongPress={() => showImageMenu(item)}
+                delayLongPress={300}
+                activeOpacity={0.8}
+              >
+                <Image
+                  source={{ uri: item.imageUrl }}
+                  style={[styles.imageMessage, imageDimensions ? { width: imageDimensions.width, height: imageDimensions.height } : {}]}
+                  resizeMode="cover"
+                  onLoad={(e) => handleImageDimensions(e, item.imageUrl || '')}
+                  onError={() => console.log('Image load error for message:', item.id)}
+                />
+              </TouchableOpacity>
+              <View style={styles.messageFooter}>
+                {item.pinned && (
+                  <Feather name="map-pin" size={12} color={isMine ? (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(233,237,239,0.6)') : (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(134,150,160,0.8)')} style={styles.pinIndicator} />
+                )}
+                {item.favourite && (
+                  <Feather name="star" size={12} color="#FFD700" style={styles.favouriteIndicator} />
+                )}
+                <Text style={[
+                  styles.messageTime,
+                  { color: isMine ? (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(233,237,239,0.6)') : (isLightMode ? 'rgba(0,0,0,0.45)' : 'rgba(134,150,160,0.8)') }
+                ]}>
+                  {item.timestamp instanceof Date ? item.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Invalid time'}
+                </Text>
+                {renderStatusTicks()}
+              </View>
+            </View>
           ) : (
             <>
               <Text style={[
                 styles.messageText,
                 { color: isMine ? (isLightMode ? '#000000' : '#E9EDEF') : (isLightMode ? '#000000' : '#E9EDEF') }
               ]}>
-                {item.message}
+                {renderTextWithLinks(item.message)}
               </Text>
               <View style={styles.messageFooter}>
                 {item.pinned && (
@@ -1400,35 +1736,58 @@ const emojiCategories = [
                 </Text>
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pinnedMessagesList}>
-                {pinnedMessages.map((message) => (
-                  <View
-                    key={message.id}
-                    style={[styles.pinnedMessageItem, { backgroundColor: isLightMode ? '#FFFFFF' : '#2A3942' }]}
-                  >
-                    <TouchableOpacity
-                      style={styles.pinnedMessageContent}
-                      onPress={() => showMessageMenu(message)}
+                {pinnedMessages.map((message) => {
+                  const isVoiceMessage = message.messageType === 'voice' && message.voiceUrl;
+                  const isImageMessage = message.messageType === 'image' && message.imageUrl;
+                  
+                  return (
+                    <View
+                      key={message.id}
+                      style={[styles.pinnedMessageItem, { backgroundColor: isLightMode ? '#FFFFFF' : '#2A3942' }]}
                     >
-                      <Text style={[styles.pinnedMessageText, { color: isLightMode ? '#000000' : '#E9EDEF' }]} numberOfLines={2}>
-                        {message.message}
-                      </Text>
-                      <Text style={[styles.pinnedMessageTime, { color: isLightMode ? '#667781' : '#8696A0' }]}>
-                        {message.timestamp instanceof Date ? message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Invalid time'}
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.pinnedMessageUnpinButton}
-                      onPress={() => {
-                        const currentMessage = pinnedMessages.find(msg => msg.id === message.id);
-                        if (currentMessage) {
-                          unpinMessage(currentMessage);
-                        }
-                      }}
-                    >
-                      <Feather name="x" size={16} color={isLightMode ? '#667781' : '#8696A0'} />
-                    </TouchableOpacity>
-                  </View>
-                ))}
+                      <TouchableOpacity
+                        style={styles.pinnedMessageContent}
+                        onPress={() => {
+                          // Scroll to the message position in chat
+                          const targetMessage = messages.find(msg => msg.id === message.id);
+                          if (targetMessage && flatListRef.current) {
+                            flatListRef.current.scrollToItem({
+                              item: targetMessage,
+                              animated: true,
+                              viewPosition: 0.1,
+                            });
+                          }
+                        }}
+                      >
+                        <View style={styles.pinnedMessageHeader}>
+                          {isVoiceMessage && (
+                            <Feather name="mic" size={14} color={isLightMode ? '#25D366' : '#00A884'} style={styles.pinnedMessageIcon} />
+                          )}
+                          {isImageMessage && (
+                            <Feather name="image" size={14} color={isLightMode ? '#25D366' : '#00A884'} style={styles.pinnedMessageIcon} />
+                          )}
+                          <Text style={[styles.pinnedMessageText, { color: isLightMode ? '#000000' : '#E9EDEF' }]} numberOfLines={2}>
+                            {isVoiceMessage ? 'Voice Message' : isImageMessage ? 'Image' : message.message}
+                          </Text>
+                        </View>
+                        <Text style={[styles.pinnedMessageTime, { color: isLightMode ? '#667781' : '#8696A0' }]}>
+                          {message.timestamp instanceof Date ? message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Invalid time'}
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.pinnedMessageUnpinButton}
+                        onPress={() => {
+                          const currentMessage = pinnedMessages.find(msg => msg.id === message.id);
+                          if (currentMessage) {
+                            unpinMessage(currentMessage);
+                          }
+                        }}
+                      >
+                        <Feather name="x" size={16} color={isLightMode ? '#667781' : '#8696A0'} />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
               </ScrollView>
             </View>
           )}
@@ -1520,7 +1879,7 @@ const emojiCategories = [
               </TouchableOpacity>
             
               {!inputMessage.trim() && (
-                <TouchableOpacity style={styles.cameraButton}>
+                <TouchableOpacity style={styles.cameraButton} onPress={pickImage}>
                   <Feather name="camera" size={22} color={isLightMode ? '#8696A0' : '#8696A0'} />
                 </TouchableOpacity>
               )}
@@ -1668,18 +2027,20 @@ const emojiCategories = [
                   <Feather name="info" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
                   <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Info</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
-                  onPress={() => {
-                    const currentMessage = messages.find(msg => msg.id === selectedMessageId);
-                    if (currentMessage) {
-                      copyMessage(currentMessage);
-                    }
-                  }}
-                >
-                  <Feather name="copy" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
-                  <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Copy</Text>
-                </TouchableOpacity>
+                {selectedMessage?.messageType !== 'image' && selectedMessage?.messageType !== 'voice' && (
+                  <TouchableOpacity
+                    style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+                    onPress={() => {
+                      const currentMessage = messages.find(msg => msg.id === selectedMessageId);
+                      if (currentMessage) {
+                        copyMessage(currentMessage);
+                      }
+                    }}
+                  >
+                    <Feather name="copy" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                    <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Copy</Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
                   style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
                   onPress={() => {
@@ -1792,18 +2153,20 @@ const emojiCategories = [
                   <Feather name="info" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
                   <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Info</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
-                  onPress={() => {
-                    const currentMessage = messages.find(msg => msg.id === selectedMessageId);
-                    if (currentMessage) {
-                      copyMessage(currentMessage);
-                    }
-                  }}
-                >
-                  <Feather name="copy" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
-                  <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Copy</Text>
-                </TouchableOpacity>
+                {selectedMessage?.messageType !== 'image' && selectedMessage?.messageType !== 'voice' && (
+                  <TouchableOpacity
+                    style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+                    onPress={() => {
+                      const currentMessage = messages.find(msg => msg.id === selectedMessageId);
+                      if (currentMessage) {
+                        copyMessage(currentMessage);
+                      }
+                    }}
+                  >
+                    <Feather name="copy" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                    <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Copy</Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
                   style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
                   onPress={() => {
@@ -2099,6 +2462,213 @@ const emojiCategories = [
         </View>
       </Modal>
 
+      {/* Full Screen Image Modal */}
+      <Modal
+        visible={!!fullScreenImageUrl}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setFullScreenImageUrl(null)}
+      >
+        <View style={styles.fullScreenImageContainer}>
+          <TouchableOpacity 
+            style={styles.fullScreenImageCloseButton}
+            onPress={() => setFullScreenImageUrl(null)}
+          >
+            <Feather name="x" size={28} color="#FFFFFF" />
+          </TouchableOpacity>
+          
+          {fullScreenImageUrl && (
+            <Image
+              source={{ uri: fullScreenImageUrl }}
+              style={styles.fullScreenImage}
+              resizeMode="contain"
+            />
+          )}
+        </View>
+      </Modal>
+
+      {/* Image Message Menu Modal */}
+      <Modal
+        visible={imageMenuVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setImageMenuVisible(false);
+          setSelectedImageMessage(null);
+        }}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            setImageMenuVisible(false);
+            setSelectedImageMessage(null);
+          }}
+        >
+          <View style={[styles.menuModal, { backgroundColor: isLightMode ? '#FFFFFF' : '#1F2C34' }]}>
+            {selectedImageMessage && (
+              <>
+                <TouchableOpacity
+                  style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setImageMenuVisible(false);
+                    setSelectedImageMessage(null);
+                    setFullScreenImageUrl(selectedImageMessage.imageUrl || null);
+                  }}
+                >
+                  <Feather name="maximize-2" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                  <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>View</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    copyImageUrl(selectedImageMessage);
+                  }}
+                >
+                  <Feather name="copy" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                  <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Copy</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setImageMenuVisible(false);
+                    setSelectedImageMessage(null);
+                    startSelectionMode(selectedImageMessage.id);
+                  }}
+                >
+                  <Feather name="check-square" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                  <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Select</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setImageMenuVisible(false);
+                    setSelectedImageMessage(null);
+                    setSelectedMessages(new Set([selectedImageMessage.id]));
+                    setShowForwardModal(true);
+                    setForwardRecipients(new Set());
+                  }}
+                >
+                  <Feather name="corner-up-right" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                  <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Forward</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setImageMenuVisible(false);
+                    setSelectedImageMessage(null);
+                    showMessageInfo(selectedImageMessage);
+                  }}
+                >
+                  <Feather name="info" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                  <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Info</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    if (selectedImageMessage.pinned) {
+                      unpinMessage(selectedImageMessage);
+                    } else {
+                      pinMessage(selectedImageMessage);
+                    }
+                    setImageMenuVisible(false);
+                    setSelectedImageMessage(null);
+                  }}
+                >
+                  <Feather name={selectedImageMessage.pinned ? "minus-circle" : "map-pin"} size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                  <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>{selectedImageMessage.pinned ? 'Unpin' : 'Pin'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    if (selectedImageMessage.favourite) {
+                      unfavouriteMessage(selectedImageMessage);
+                    } else {
+                      favouriteMessage(selectedImageMessage);
+                    }
+                    setImageMenuVisible(false);
+                    setSelectedImageMessage(null);
+                  }}
+                >
+                  <Feather name="star" size={20} color={selectedImageMessage.favourite ? "#FFD700" : (isLightMode ? '#667781' : '#8696A0')} />
+                  <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>{selectedImageMessage.favourite ? 'Unfavourite' : 'Favourite'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setReplyingTo(selectedImageMessage);
+                    setImageMenuVisible(false);
+                    setSelectedImageMessage(null);
+                  }}
+                >
+                  <Feather name="corner-up-left" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                  <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Reply</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.menuItem, { borderBottomColor: isLightMode ? '#E9EDEF' : '#2A3942' }]}
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    deleteForMe(selectedImageMessage);
+                    setImageMenuVisible(false);
+                    setSelectedImageMessage(null);
+                  }}
+                >
+                  <Feather name="trash-2" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                  <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Delete for me</Text>
+                </TouchableOpacity>
+                {selectedImageMessage.from === currentUserId && (
+                  <TouchableOpacity
+                    style={[styles.menuItem, { borderBottomWidth: 0 }]}
+                    onPress={async () => {
+                      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      deleteForEveryone(selectedImageMessage);
+                      setImageMenuVisible(false);
+                      setSelectedImageMessage(null);
+                    }}
+                  >
+                    <Feather name="trash" size={20} color={isLightMode ? '#667781' : '#8696A0'} />
+                    <Text style={[styles.menuItemText, { color: isLightMode ? '#000000' : '#E9EDEF' }]}>Delete for everyone</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Full Screen Image Modal */}
+      <Modal
+        visible={!!fullScreenImageUrl}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setFullScreenImageUrl(null)}
+      >
+        <View style={styles.fullScreenImageContainer}>
+          <TouchableOpacity 
+            style={styles.fullScreenImageCloseButton}
+            onPress={() => setFullScreenImageUrl(null)}
+          >
+            <Feather name="x" size={28} color="#FFFFFF" />
+          </TouchableOpacity>
+          
+          {fullScreenImageUrl && (
+            <Image
+              source={{ uri: fullScreenImageUrl }}
+              style={styles.fullScreenImage}
+              resizeMode="contain"
+            />
+          )}
+        </View>
+      </Modal>
+
       {/* Copy Toast */}
       {showCopyToast && (
         <View style={styles.copyToast}>
@@ -2253,6 +2823,17 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     minWidth: 250,
   },
+  imageMessageBubble: {
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    maxWidth: '90%',
+  },
+  imageMessage: {
+    width: 250,
+    height: 250,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+  },
   selectedMessage: {
     opacity: 0.7,
   },
@@ -2276,6 +2857,9 @@ const styles = StyleSheet.create({
   },
   messageTime: {
     fontSize: 11,
+  },
+  linkText: {
+    textDecorationLine: 'underline',
   },
   doubleCheck: {
     flexDirection: 'row',
@@ -2683,10 +3267,18 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     alignSelf: 'flex-start',
   },
+  pinnedMessageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  pinnedMessageIcon: {
+    marginRight: 6,
+  },
   pinnedMessageText: {
     fontSize: 14,
     lineHeight: 18,
-    marginBottom: 4,
+    flex: 1,
   },
   pinnedMessageTime: {
     fontSize: 12,
@@ -2795,5 +3387,24 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  fullScreenImageContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullScreenImage: {
+    width: '100%',
+    height: '100%',
+  },
+  fullScreenImageCloseButton: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 10,
+    padding: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 24,
   },
 });
